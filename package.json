@@ -1,0 +1,7 @@
+{
+  "name": "optcg-deck-buyer",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/buy.test.js tests/cards.test.js"
+  }
+}

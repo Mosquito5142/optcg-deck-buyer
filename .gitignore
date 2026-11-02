@@ -1,0 +1,3 @@
+# ไฟล์ที่ Export จากแอป (มีชื่อคนขายและราคา)
+optcg-deck-buyer-*.json
+node_modules/

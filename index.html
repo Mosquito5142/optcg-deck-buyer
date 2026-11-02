@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OPTCG Deck Buyer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Deck Buyer</div>
+
+    <div class="deck-picker">
+      <select id="deck-select" aria-label="เลือกเด็ค"></select>
+      <button type="button" id="deck-new" class="btn" title="เด็คใหม่">+ เด็ค</button>
+      <button type="button" id="deck-rename" class="btn ghost" title="เปลี่ยนชื่อเด็ค">ชื่อ</button>
+      <button type="button" id="deck-delete" class="btn ghost" title="ลบเด็ค">ลบ</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span>ค่าการ์ด</span><b id="stat-card">0 ฿</b></div>
+      <div class="stat"><span>ค่าส่ง</span><b id="stat-ship">0 ฿</b></div>
+      <div class="stat grand"><span>ต้นทุนรวม</span><b id="stat-total">0 ฿</b></div>
+      <div class="stat" id="stat-missing-wrap"><span>ยังขาด</span><b id="stat-missing">0 ใบ</b></div>
+    </div>
+
+    <div class="file-actions">
+      <button type="button" id="btn-theme" class="btn ghost" title="สลับธีม" aria-label="สลับธีม">◐</button>
+      <button type="button" id="btn-export" class="btn ghost">Export</button>
+      <label class="btn ghost">Import<input type="file" id="file-import" accept="application/json,.json" hidden></label>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="pane deck-pane" id="deck-pane">
+      <div class="pane-head">
+        <h2>การ์ดในเด็ค <span class="count" id="deck-count"></span></h2>
+        <form class="add-form" id="add-card">
+          <input id="add-code" placeholder="รหัส เช่น OP05-119" autocomplete="off" required aria-label="รหัสการ์ด">
+          <input id="add-qty" type="number" min="1" max="50" value="4" aria-label="จำนวน">
+          <button type="submit" class="btn primary">เพิ่ม</button>
+          <label class="btn ghost">.deck<input type="file" id="file-deck" accept=".deck,text/plain" hidden></label>
+          <button type="button" id="btn-paste" class="btn ghost">วางเด็ค</button>
+        </form>
+      </div>
+      <p class="hint" id="pick-hint"></p>
+      <div class="deck-grid" id="deck-grid"></div>
+    </section>
+
+    <aside class="pane seller-pane">
+      <div class="pane-head">
+        <h2>คนขาย / ร้าน</h2>
+        <button type="button" id="seller-add" class="btn primary">+ คนขาย</button>
+      </div>
+      <div class="boxes" id="boxes"></div>
+    </aside>
+  </main>
+
+  <dialog id="dlg">
+    <form method="dialog" id="dlg-form">
+      <div class="dlg-head">
+        <img id="dlg-img" alt="">
+        <div>
+          <h3 id="dlg-title"></h3>
+          <p class="muted" id="dlg-sub"></p>
+        </div>
+      </div>
+      <div class="row">
+        <label>จำนวน<input id="dlg-qty" type="number" min="1" required></label>
+      </div>
+      <div class="row" id="dlg-price-row">
+        <label>วิธีคิดราคา
+          <select id="dlg-pricing">
+            <option value="each">ต่อใบ</option>
+            <option value="lot">เหมา (ราคารวมทั้งรายการ)</option>
+          </select>
+        </label>
+        <label><span id="dlg-price-label">ราคาต่อใบ</span><input id="dlg-price" type="number" min="0" step="any" required></label>
+      </div>
+      <p class="error" id="dlg-error" hidden></p>
+      <div class="row end">
+        <button type="button" id="dlg-cancel" class="btn ghost">ยกเลิก</button>
+        <button type="submit" class="btn primary">บันทึก</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="paste-dlg" class="paste-dlg">
+    <form method="dialog" id="paste-form">
+      <h3>วางเด็ค</h3>
+      <p class="muted">วางข้อความแบบ <code>4xOP01-016</code> บรรทัดละใบ หรือ HTML ของหน้าเด็คจาก oplaytcg.com
+        (คลิกขวาที่รายการการ์ด → Inspect → คลิกขวาที่ <code>&lt;div&gt;</code> ที่ครอบการ์ดทั้งหมด → Copy → Copy outerHTML)</p>
+      <textarea id="paste-text" rows="10" spellcheck="false" placeholder="1xOP09-042&#10;4xOP09-056&#10;…"></textarea>
+      <p class="muted" id="paste-preview"></p>
+      <div class="row end">
+        <button type="button" id="paste-cancel" class="btn ghost">ยกเลิก</button>
+        <button type="submit" class="btn primary">เพิ่มเข้าเด็ค</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="preview" class="preview">
+    <img id="preview-img" alt="">
+    <div class="preview-cap" id="preview-cap"></div>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="buy.js"></script>
+  <script src="cards.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
