@@ -51,10 +51,14 @@
     return (state.cards[code] && state.cards[code].name) || code;
   }
 
-  // ลำดับรูปที่ลองใช้: รูปจากเกมในเครื่องก่อน แล้วค่อยรูปจาก optcgapi
+  // โฟลเดอร์เกมมีเฉพาะตอนเปิดจากไฟล์ในเครื่องหรือ localhost บนโฮสต์จะได้ 404 ทุกใบ
+  const hasGameFolder = location.protocol === 'file:'
+    || ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+
+  // ลำดับรูปที่ลองใช้: รูปจากเกมในเครื่องก่อน (ถ้ามี) แล้วค่อยรูปจาก optcgapi
   function imageSources(code) {
     const api = state.cards[code] && state.cards[code].image;
-    return [window.Cards.gameImage(code), api].filter(Boolean);
+    return [hasGameFolder && window.Cards.gameImage(code), api].filter(Boolean);
   }
 
   // <img onerror>: ลองรูปถัดไป ถ้าหมดแล้วเอารูปออกเพื่อให้เห็นชื่อการ์ดแทน
@@ -99,7 +103,7 @@
     const [first, ...rest] = imageSources(code);
     // ไม่มีรูป หรือรูปโหลดไม่ได้: แสดงชื่อและรหัสแทน
     return `<div class="art"><div class="placeholder"><span>${esc(cardName(code))}</span><small>${esc(code)}</small></div>
-      <img src="${esc(first)}" data-fallback="${esc(rest.join('|'))}" alt="${esc(cardName(code))}" loading="lazy" draggable="false" onerror="nextImage(this)"></div>`;
+      ${first ? `<img src="${esc(first)}" data-fallback="${esc(rest.join('|'))}" alt="${esc(cardName(code))}" loading="lazy" draggable="false" onerror="nextImage(this)">` : ''}</div>`;
   }
 
   let toastTimer;
@@ -299,7 +303,8 @@
       img.dataset.fallback = next.slice(1).join('|');
       img.src = next[0];
     };
-    img.src = first;
+    if (first) img.src = first;
+    else img.removeAttribute('src');
   }
 
   function openPreview(code) {
