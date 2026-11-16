@@ -248,46 +248,49 @@
     return row ? row.left : 0;
   }
 
-  // กล่องที่ตั้งราคารวมแล้ว: เพิ่มจำนวนที่เหลือทันที รวมกับรายการรหัสเดิมในกล่อง
   function assign(sellerId, code) {
     if (!state.sellers.some((x) => x.id === sellerId)) return;
-    if (sellerTotal(sellerId) === null) { openAssign(sellerId, code); return; }
-    const left = leftOf(code);
-    if (left === 0) { toast(`${cardName(code)} ครบแล้ว`); return; }
-    const deck = currentDeck();
-    const line = deck.purchases.find((p) => p.sellerId === sellerId && p.code === code);
-    if (line) line.qty += left;
-    else deck.purchases.push({ id: uid(), sellerId, code, qty: left, price: 0, pricing: 'lot' });
-    save(); renderAll(); popBox(sellerId);
+    openAssign(sellerId, code);
   }
 
+  // กล่องที่ตั้งราคารวมแล้ว: ถามแค่จำนวน (คนขายอาจมีให้ไม่ครบ) มีปุ่มเลือกเร็ว
   function openAssign(sellerId, code) {
     const seller = state.sellers.find((x) => x.id === sellerId);
     const left = leftOf(code);
-    pending = { sellerId, code };
+    const lump = sellerTotal(sellerId) !== null;
+    pending = { sellerId, code, lump };
     setImage($('#dlg-img'), code);
     $('#dlg-title').textContent = `${cardName(code)} → ${seller.name}`;
     $('#dlg-sub').textContent = `${code} · ${left > 0 ? `ยังเหลือ ${left} ใบในเด็ค` : 'ครบแล้ว ยังบันทึกเพิ่มได้'}`;
     $('#dlg-qty').value = left > 0 ? left : 1;
+    $('#dlg-quick').innerHTML = Array.from({ length: Math.min(Math.max(left, 4), 8) }, (_, i) =>
+      `<button type="button" class="btn chip ${i + 1 === left ? 'primary' : ''}" data-qty="${i + 1}">${i + 1}</button>`).join('');
+    $('#dlg-price-row').hidden = lump;
+    $('#dlg-price').required = !lump;
     $('#dlg-pricing').value = 'each';
     $('#dlg-price').value = lastPrice(code);
     syncPricingLabel();
     $('#dlg-error').hidden = true;
     $('#dlg').showModal();
-    $('#dlg-price').focus();
-    $('#dlg-price').select();
+    const focus = lump ? $('#dlg-qty') : $('#dlg-price');
+    focus.focus();
+    focus.select();
   }
 
   function submitAssign(e) {
     e.preventDefault();
+    const { sellerId, code, lump } = pending;
     const qty = parseNum($('#dlg-qty').value);
-    const price = parseNum($('#dlg-price').value);
-    const pricing = $('#dlg-pricing').value === 'lot' ? 'lot' : 'each';
+    const price = lump ? 0 : parseNum($('#dlg-price').value);
+    const pricing = lump || $('#dlg-pricing').value === 'lot' ? 'lot' : 'each';
     const err = $('#dlg-error');
     if (qty === null || !Number.isInteger(qty) || qty < 1) { err.textContent = 'จำนวนต้องเป็นจำนวนเต็มตั้งแต่ 1'; err.hidden = false; return; }
     if (price === null) { err.textContent = pricing === 'lot' ? 'ราคารวมต้องเป็นตัวเลขที่ไม่ติดลบ' : 'ราคาต่อใบต้องเป็นตัวเลขที่ไม่ติดลบ'; err.hidden = false; return; }
-    const { sellerId } = pending;
-    currentDeck().purchases.push({ id: uid(), sellerId, code: pending.code, qty, price, pricing });
+    const deck = currentDeck();
+    // กล่องราคารวม: รวมกับการ์ดรหัสเดิมในกล่องเป็นรายการเดียว
+    const line = lump && deck.purchases.find((p) => p.sellerId === sellerId && p.code === code);
+    if (line) line.qty += qty;
+    else deck.purchases.push({ id: uid(), sellerId, code, qty, price, pricing });
     pending = null;
     $('#dlg').close();
     save(); renderAll(); popBox(sellerId);
@@ -513,6 +516,14 @@
   function bindDialogs() {
     $('#dlg-form').addEventListener('submit', submitAssign);
     $('#dlg-pricing').addEventListener('change', syncPricingLabel);
+    // ปุ่มจำนวนเร็ว: กล่องราคารวมบันทึกทันที กล่องปกติแค่ตั้งจำนวนแล้วรอกรอกราคา
+    $('#dlg-quick').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-qty]');
+      if (!b) return;
+      $('#dlg-qty').value = b.dataset.qty;
+      if (pending && pending.lump) $('#dlg-form').requestSubmit();
+      else $('#dlg-price').focus();
+    });
     $('#dlg-cancel').addEventListener('click', () => { pending = null; $('#dlg').close(); });
     // คลิกที่ใดก็ได้ในหน้าดูรูปใหญ่เพื่อปิด
     $('#preview').addEventListener('click', () => $('#preview').close());
