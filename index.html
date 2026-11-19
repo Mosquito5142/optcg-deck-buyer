@@ -12,9 +12,10 @@
 
     <div class="deck-picker">
       <select id="deck-select" aria-label="เลือกเด็ค"></select>
-      <button type="button" id="deck-new" class="btn" title="เด็คใหม่">+ เด็ค</button>
-      <button type="button" id="deck-rename" class="btn ghost" title="เปลี่ยนชื่อเด็ค">ชื่อ</button>
-      <button type="button" id="deck-delete" class="btn ghost" title="ลบเด็ค">ลบ</button>
+      <button type="button" id="deck-new" class="btn desk-only" title="เด็คใหม่">+ เด็ค</button>
+      <button type="button" id="deck-rename" class="btn ghost desk-only" title="เปลี่ยนชื่อเด็ค">ชื่อ</button>
+      <button type="button" id="deck-delete" class="btn ghost desk-only" title="ลบเด็ค">ลบ</button>
+      <button type="button" id="btn-menu" class="btn ghost mobile-only" aria-label="เมนู">⋯</button>
     </div>
 
     <div class="stats">
@@ -24,7 +25,7 @@
       <div class="stat" id="stat-missing-wrap"><span>ยังขาด</span><b id="stat-missing">0 ใบ</b></div>
     </div>
 
-    <div class="file-actions">
+    <div class="file-actions desk-only">
       <button type="button" id="btn-theme" class="btn ghost" title="สลับธีม" aria-label="สลับธีม">◐</button>
       <button type="button" id="btn-export" class="btn ghost">Export</button>
       <label class="btn ghost">Import<input type="file" id="file-import" accept="application/json,.json" hidden></label>
@@ -39,15 +40,16 @@
           <input id="add-code" placeholder="รหัส เช่น OP05-119" autocomplete="off" required aria-label="รหัสการ์ด">
           <input id="add-qty" type="number" min="1" max="50" value="4" aria-label="จำนวน">
           <button type="submit" class="btn primary">เพิ่ม</button>
-          <label class="btn ghost">.deck<input type="file" id="file-deck" accept=".deck,text/plain" hidden></label>
-          <button type="button" id="btn-paste" class="btn ghost">วางเด็ค</button>
+          <label class="btn ghost desk-only">.deck<input type="file" id="file-deck" accept=".deck,text/plain" hidden></label>
+          <button type="button" id="btn-paste" class="btn ghost desk-only">วางเด็ค</button>
+          <button type="button" id="btn-shot" class="btn ghost desk-only" title="ส่งออกรูปการ์ดที่ยังขาด">ส่งออกรูป</button>
         </form>
       </div>
       <p class="hint" id="pick-hint"></p>
       <div class="deck-grid" id="deck-grid"></div>
     </section>
 
-    <aside class="pane seller-pane">
+    <aside class="pane seller-pane" id="seller-pane">
       <div class="pane-head">
         <h2>คนขาย / ร้าน</h2>
         <button type="button" id="seller-add" class="btn primary">+ คนขาย</button>
@@ -55,6 +57,46 @@
       <div class="boxes" id="boxes"></div>
     </aside>
   </main>
+
+  <!-- มือถือ: แท็บด้านล่างสลับระหว่างการ์ดกับคนขาย -->
+  <nav class="mtabs mobile-only" aria-label="สลับหน้า">
+    <button type="button" data-mtab="deck"><span>การ์ด</span><b id="mtab-deck"></b></button>
+    <button type="button" data-mtab="sellers"><span>คนขาย</span><b id="mtab-sellers"></b></button>
+  </nav>
+
+  <!-- มือถือ: แตะการ์ดแล้วเลือกคนขาย -->
+  <dialog id="sheet" class="sheet">
+    <div class="sheet-head">
+      <img id="sheet-img" alt="">
+      <div>
+        <h3 id="sheet-title"></h3>
+        <p class="muted" id="sheet-sub"></p>
+      </div>
+    </div>
+    <p class="sheet-label">ได้ใบนี้จากใคร?</p>
+    <div class="sheet-list" id="sheet-list"></div>
+    <div class="row end">
+      <button type="button" id="sheet-preview" class="btn ghost">ดูรูปใหญ่</button>
+      <button type="button" id="sheet-close" class="btn ghost">ปิด</button>
+    </div>
+  </dialog>
+
+  <!-- มือถือ: เมนู ⋯ -->
+  <dialog id="menu" class="sheet">
+    <h3>เมนู</h3>
+    <div class="menu-list">
+      <button type="button" class="btn" data-proxy="deck-new">+ เด็คใหม่</button>
+      <button type="button" class="btn" data-proxy="deck-rename">เปลี่ยนชื่อเด็ค</button>
+      <button type="button" class="btn" data-proxy="file-deck">นำเข้าไฟล์ .deck</button>
+      <button type="button" class="btn" data-proxy="btn-paste">วางเด็ค</button>
+      <button type="button" class="btn" data-proxy="btn-shot">ส่งออกรูปการ์ดที่ยังขาด</button>
+      <button type="button" class="btn" data-proxy="btn-export">Export ข้อมูล</button>
+      <button type="button" class="btn" data-proxy="file-import">Import ข้อมูล</button>
+      <button type="button" class="btn" data-proxy="btn-theme">สลับธีมมืด/สว่าง</button>
+      <button type="button" class="btn danger" data-proxy="deck-delete">ลบเด็คนี้</button>
+    </div>
+    <div class="row end"><button type="button" id="menu-close" class="btn ghost">ปิด</button></div>
+  </dialog>
 
   <dialog id="dlg">
     <form method="dialog" id="dlg-form">
@@ -109,6 +151,7 @@
 
   <script src="buy.js"></script>
   <script src="cards.js"></script>
+  <script src="shot.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

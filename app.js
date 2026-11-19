@@ -36,8 +36,8 @@
   }
 
   let state = load();
-  let selectedCode = null; // การ์ดที่แตะเลือกไว้ (จอแคบ)
   let pending = null;      // { sellerId, code } ระหว่างกรอกจำนวนและราคา
+  let sheetCode = null;    // การ์ดที่แตะไว้ในแผ่นเลือกคนขาย (จอแคบ)
 
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) { toast('บันทึกไม่ได้ (พื้นที่เต็มหรือถูกบล็อก)'); }
@@ -122,6 +122,15 @@
     renderTopbar(s);
     renderDeck(s);
     renderBoxes(s);
+    $('#mtab-deck').textContent = s.remaining.length === 0 ? '' : s.missingCount === 0 ? 'ครบ' : `ขาด ${s.missingCount}`;
+    $('#mtab-sellers').textContent = s.total ? baht(s.total) : '';
+  }
+
+  // แท็บด้านล่างบนมือถือ (จำไว้ใน body เพื่อให้ CSS ซ่อนอีกฝั่ง)
+  function showMobileTab(tab) {
+    document.body.dataset.mtab = tab;
+    document.querySelectorAll('[data-mtab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.mtab === tab)));
+    window.scrollTo(0, 0);
   }
 
   function renderTopbar(s) {
@@ -141,11 +150,9 @@
     const deck = currentDeck();
     const total = deck.items.reduce((a, i) => a + i.qty, 0);
     $('#deck-count').textContent = total ? `${total} ใบ · ${deck.items.length} แบบ` : '';
-    $('#pick-hint').textContent = selectedCode
-      ? `เลือก ${cardName(selectedCode)} แล้ว แตะกล่องคนขายเพื่อจัด · แตะการ์ดเดิมเพื่อยกเลิก`
-      : narrow.matches
-        ? 'แตะการ์ดแล้วแตะกล่องคนขาย'
-        : 'ลากการ์ดไปวางในกล่องคนขาย · คลิกการ์ดเพื่อดูรูปใหญ่ · ลากไฟล์ .deck มาวางที่นี่เพื่อนำเข้า';
+    $('#pick-hint').textContent = narrow.matches
+      ? 'แตะการ์ดเพื่อเลือกว่าได้จากใคร · กดค้างเพื่อดูรูปใหญ่'
+      : 'ลากการ์ดไปวางในกล่องคนขาย · คลิกการ์ดเพื่อดูรูปใหญ่ · ลากไฟล์ .deck มาวางที่นี่เพื่อนำเข้า';
 
     if (s.remaining.length === 0) {
       $('#deck-grid').innerHTML = `<div class="empty"><b>ยังไม่มีการ์ดในเด็ค</b>
@@ -155,7 +162,7 @@
     $('#deck-grid').innerHTML = s.remaining.map((r) => {
       const hasBuys = deck.purchases.some((p) => p.code === r.code);
       const c = state.cards[r.code] || {};
-      return `<div class="tile ${r.left === 0 ? 'done' : ''} ${r.code === selectedCode ? 'selected' : ''}"
+      return `<div class="tile ${r.left === 0 ? 'done' : ''}"
           draggable="true" data-code="${esc(r.code)}" tabindex="0" title="${esc(cardName(r.code))}">
         ${art(r.code)}
         <span class="ribbon ${r.left === 0 ? 'ok' : ''}">${r.left === 0 ? '✓ ครบ' : `เหลือ ${r.left}`}</span>
@@ -176,7 +183,7 @@
       const seller = state.sellers.find((x) => x.id === b.id);
       const lump = sellerTotal(b.id);
       const pieces = b.lines.reduce((a, p) => a + p.qty, 0);
-      return `<div class="box ${selectedCode ? 'armed' : ''}" data-seller="${b.id}">
+      return `<div class="box" data-seller="${b.id}">
         <div class="box-head">
           <input class="name" data-field="name" value="${esc(seller.name)}" aria-label="ชื่อคนขาย">
           <div class="box-total">${baht(b.total)}</div>
@@ -187,7 +194,7 @@
           </div>
           ${b.lines.length ? `<div class="box-sub">${pieces} ใบ · ${lump !== null ? 'ราคารวม' : 'ค่าการ์ด'} ${baht(b.cardCost)} + ค่าส่ง ${baht(b.shipping)}</div>` : ''}
         </div>
-        ${b.lines.length === 0 ? `<div class="drop-zone">${narrow.matches ? 'แตะการ์ดแล้วแตะกล่องนี้' : 'ลากการ์ดมาวางที่นี่'}</div>` : `
+        ${b.lines.length === 0 ? `<div class="drop-zone">${narrow.matches ? 'ไปที่แท็บ "การ์ด" แล้วแตะการ์ดเพื่อจัดเข้ากล่องนี้' : 'ลากการ์ดมาวางที่นี่'}</div>` : `
         <div class="mini-grid">
           ${b.lines.map((p) => `<div class="mini" data-id="${p.id}" data-code="${esc(p.code)}" title="${esc(cardName(p.code))}">
             ${art(p.code)}
@@ -321,14 +328,12 @@
   function bindTopbar() {
     $('#deck-select').addEventListener('change', (e) => {
       state.currentDeckId = e.target.value;
-      selectedCode = null;
       save(); renderAll();
     });
     $('#deck-new').addEventListener('click', () => {
       const d = newDeck(`เด็ค ${state.decks.length + 1}`);
       state.decks.push(d);
       state.currentDeckId = d.id;
-      selectedCode = null;
       save(); renderAll();
     });
     $('#deck-rename').addEventListener('click', () => {
@@ -344,7 +349,6 @@
       state.decks = state.decks.filter((d) => d.id !== deck.id);
       if (state.decks.length === 0) state.decks.push(newDeck('เด็คใหม่'));
       state.currentDeckId = state.decks[0].id;
-      selectedCode = null;
       save(); renderAll();
     });
     $('#btn-theme').addEventListener('click', () => {
@@ -394,17 +398,26 @@
         const deck = currentDeck();
         if (deck.purchases.some((p) => p.code === code)) { toast('ลบการ์ดใบนี้ออกจากกล่องคนขายก่อน'); return; }
         deck.items = deck.items.filter((i) => i.code !== code);
-        if (selectedCode === code) selectedCode = null;
         save(); renderAll();
         return;
       }
-      if (narrow.matches) {
-        selectedCode = selectedCode === code ? null : code;
-        renderAll();
-      } else {
-        openPreview(code);
-      }
+      if (longPressed) { longPressed = false; return; }
+      if (narrow.matches) openSheet(code);
+      else openPreview(code);
     });
+
+    // กดค้างที่การ์ด (มือถือ) = ดูรูปใหญ่
+    let pressTimer = null;
+    let longPressed = false;
+    const cancelPress = () => clearTimeout(pressTimer);
+    grid.addEventListener('pointerdown', (e) => {
+      const tile = e.target.closest('.tile');
+      if (!tile || e.pointerType === 'mouse' || e.target.closest('button')) return;
+      longPressed = false;
+      pressTimer = setTimeout(() => { longPressed = true; openPreview(tile.dataset.code); }, 450);
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => grid.addEventListener(ev, cancelPress));
+    grid.addEventListener('contextmenu', (e) => { if (e.target.closest('.tile') && narrow.matches) e.preventDefault(); });
     grid.addEventListener('keydown', (e) => {
       const tile = e.target.closest('.tile');
       if (tile && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPreview(tile.dataset.code); }
@@ -476,13 +489,6 @@
         return;
       }
       if (t.closest('button, input, label')) return;
-      if (selectedCode) {
-        const code = selectedCode;
-        selectedCode = null;
-        assign(box.dataset.seller, code);
-        renderAll();
-        return;
-      }
       const mini = t.closest('.mini');
       if (mini) openPreview(mini.dataset.code);
     });
@@ -527,6 +533,90 @@
     $('#dlg-cancel').addEventListener('click', () => { pending = null; $('#dlg').close(); });
     // คลิกที่ใดก็ได้ในหน้าดูรูปใหญ่เพื่อปิด
     $('#preview').addEventListener('click', () => $('#preview').close());
+  }
+
+  // ---------- มือถือ: แผ่นเลือกคนขาย เมนู แท็บ ----------
+
+  function openSheet(code) {
+    sheetCode = code;
+    const s = summary();
+    const row = s.remaining.find((r) => r.code === code);
+    setImage($('#sheet-img'), code);
+    $('#sheet-title').textContent = cardName(code);
+    $('#sheet-sub').textContent = `${code} · ${row && row.left > 0 ? `ยังขาด ${row.left} ใบ` : 'ครบแล้ว'}`;
+    $('#sheet-list').innerHTML = s.sellers.map((b) => {
+      const has = b.lines.filter((p) => p.code === code).reduce((a, p) => a + p.qty, 0);
+      return `<button type="button" class="seller-pick" data-seller="${b.id}">
+        <span>${esc(b.name)}<small>${has ? `มีใบนี้แล้ว ×${has} · ` : ''}${b.lines.length} รายการ</small></span>
+        <b>${baht(b.total)}</b>
+      </button>`;
+    }).join('') + '<button type="button" class="seller-pick new" data-seller="new">+ คนขายใหม่</button>';
+    $('#sheet').showModal();
+  }
+
+  function bindMobile() {
+    document.querySelectorAll('[data-mtab]').forEach((b) => b.addEventListener('click', () => showMobileTab(b.dataset.mtab)));
+
+    $('#sheet-list').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-seller]');
+      if (!b || !sheetCode) return;
+      let sellerId = b.dataset.seller;
+      if (sellerId === 'new') {
+        const name = prompt('ชื่อคนขาย', `คนขาย ${state.sellers.length + 1}`);
+        if (name === null) return;
+        sellerId = uid();
+        state.sellers.push({ id: sellerId, name: name.trim() || 'คนขายไม่มีชื่อ', shipping: 0 });
+        save(); renderAll();
+      }
+      const code = sheetCode;
+      $('#sheet').close();
+      assign(sellerId, code);
+    });
+    $('#sheet-close').addEventListener('click', () => $('#sheet').close());
+    $('#sheet-preview').addEventListener('click', () => { $('#sheet').close(); openPreview(sheetCode); });
+    $('#sheet').addEventListener('close', () => { sheetCode = null; });
+
+    $('#btn-menu').addEventListener('click', () => $('#menu').showModal());
+    $('#menu-close').addEventListener('click', () => $('#menu').close());
+    // ปุ่มในเมนูกดปุ่มเดิมบนจอคอมแทน (ฟังก์ชันเดียวกัน)
+    $('#menu').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-proxy]');
+      if (!b) return;
+      $('#menu').close();
+      document.getElementById(b.dataset.proxy).click();
+    });
+    // แตะพื้นหลังรอบแผ่นเพื่อปิด
+    for (const id of ['#sheet', '#menu']) {
+      $(id).addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+    }
+  }
+
+  // ---------- ส่งออกรูปการ์ดที่ยังขาด ----------
+
+  async function exportShot() {
+    const deck = currentDeck();
+    const s = summary();
+    const cards = s.remaining.filter((r) => r.left > 0)
+      .map((r) => ({ code: r.code, name: cardName(r.code), left: r.left, sources: imageSources(r.code) }));
+    if (cards.length === 0) { toast(s.remaining.length ? 'ครบทุกใบแล้ว ไม่มีการ์ดที่ขาด' : 'ยังไม่มีการ์ดในเด็ค'); return; }
+    toast('กำลังสร้างรูป…');
+    const date = new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+    const blob = await window.Shot.render({
+      title: `${deck.name} · ยังขาด ${s.missingCount} ใบ`,
+      subtitle: `${cards.length} แบบ · ${date}`,
+      cards,
+    });
+    const file = new File([blob], `${deck.name.replace(/[\\/:*?"<>|]+/g, '_')}-ขาด.jpg`, { type: 'image/jpeg' });
+    // มือถือ: เปิดหน้าแชร์ (ส่งเข้า LINE/Messenger ได้ทันที) ถ้าไม่ได้ค่อยดาวน์โหลด
+    if (narrow.matches && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('ดาวน์โหลดรูปแล้ว');
   }
 
   // ---------- import .deck ----------
@@ -604,7 +694,6 @@
       if (!confirm('นำเข้าข้อมูลนี้แทนข้อมูลปัจจุบันทั้งหมด?')) return;
       state = { cards: {}, ...data };
       if (!state.decks.some((d) => d.id === state.currentDeckId)) state.currentDeckId = state.decks[0].id;
-      selectedCode = null;
       save(); renderAll();
       toast('นำเข้าแล้ว');
     };
@@ -622,7 +711,10 @@
   bindBoxes();
   bindDialogs();
   bindPaste();
-  narrow.addEventListener('change', () => { selectedCode = null; renderAll(); });
+  $('#btn-shot').addEventListener('click', exportShot);
+  bindMobile();
+  showMobileTab('deck');
+  narrow.addEventListener('change', renderAll);
   renderAll();
   // ดึงชื่อ/รูปของการ์ดที่ยังไม่มีข้อมูล
   const codes = new Set(state.decks.flatMap((d) => d.items.map((i) => i.code)));
