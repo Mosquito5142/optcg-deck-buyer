@@ -1,4 +1,4 @@
-// Vercel serverless function: GET = อ่านข้อมูลที่ซิงก์ไว้, PUT = เขียนทับ (ต้องมี header x-sync-key)
+// Vercel serverless function: GET = อ่านข้อมูลล่าสุด, PUT = บันทึก (ชนกันแล้วชุดที่แก้ล่าสุดชนะ)
 'use strict';
 
 const { handleSync } = require('./_core.js');
@@ -9,6 +9,6 @@ module.exports = async (req, res) => {
   if (typeof body === 'string') {
     try { body = JSON.parse(body); } catch (_) { body = null; }
   }
-  const out = await handleSync({ method: req.method, headers: req.headers, body }, process.env);
+  const out = await handleSync({ method: req.method, body }, process.env);
   res.status(out.status).json(out.body);
 };

@@ -1,10 +1,25 @@
-// Turso จำลองในหน่วยความจำ รับ /v2/pipeline แล้วทำตามคำสั่งที่ api/_core.js ส่งมา (ไม่ใช่ไฟล์เทส)
+// Turso จำลอง: รับ /v2/pipeline แล้วรัน SQL จริงบน SQLite ในหน่วยความจำ (node:sqlite) ไม่ใช่ไฟล์เทส
 'use strict';
 
+const { DatabaseSync } = require('node:sqlite');
+
 function createFakeTurso() {
-  const db = { row: null, calls: 0, failNext: false, lastUrl: null, lastAuth: null };
-  const text = (v) => ({ type: 'text', value: v });
-  const int = (v) => ({ type: 'integer', value: String(v) });
+  const sqlite = new DatabaseSync(':memory:');
+  const db = {
+    calls: 0,
+    failNext: false,
+    lastUrl: null,
+    lastAuth: null,
+    all: (sql, ...args) => sqlite.prepare(sql).all(...args).map((row) => ({ ...row })), // แถวของ node:sqlite ไม่มี prototype
+  };
+
+  const toValue = (v) => {
+    if (v === null || v === undefined) return { type: 'null' };
+    if (typeof v === 'bigint') return { type: 'integer', value: String(v) };
+    if (typeof v === 'number') return Number.isInteger(v) ? { type: 'integer', value: String(v) } : { type: 'float', value: v };
+    return { type: 'text', value: String(v) };
+  };
+  const fromArg = (a) => (a.type === 'integer' ? Number(a.value) : a.type === 'null' ? null : a.value);
 
   async function fetchImpl(url, init) {
     db.calls++;
@@ -15,26 +30,18 @@ function createFakeTurso() {
     const { requests } = JSON.parse(init.body);
     const results = requests.map((r) => {
       if (r.type === 'close') return { type: 'ok', response: { type: 'close' } };
-      const { sql, args } = r.stmt;
-      const a = args.map((x) => x.value);
-      const result = { cols: [], rows: [], affected_row_count: 0 };
-      if (/^\s*CREATE TABLE/i.test(sql)) {
-        // ตารางมีอยู่แล้วหรือสร้างใหม่ ไม่ต้องทำอะไร
-      } else if (/^\s*SELECT/i.test(sql)) {
-        if (db.row) result.rows = [[text(db.row.data), int(db.row.updatedAt)]];
-      } else if (/^\s*INSERT/i.test(sql)) {
-        const [, data, now, base] = a;
-        if (!db.row) {
-          db.row = { data, updatedAt: Number(now) };
-          result.affected_row_count = 1;
-        } else if (db.row.updatedAt === Number(base)) {
-          db.row = { data, updatedAt: Math.max(Number(now), db.row.updatedAt + 1) };
-          result.affected_row_count = 1;
+      try {
+        const stmt = sqlite.prepare(r.stmt.sql);
+        const args = (r.stmt.args || []).map(fromArg);
+        if (/^\s*SELECT/i.test(r.stmt.sql)) {
+          const rows = stmt.all(...args).map((row) => Object.values(row).map(toValue));
+          return { type: 'ok', response: { type: 'execute', result: { cols: [], rows, affected_row_count: 0 } } };
         }
-      } else {
-        return { type: 'error', error: { message: 'unexpected sql' } };
+        const info = stmt.run(...args);
+        return { type: 'ok', response: { type: 'execute', result: { cols: [], rows: [], affected_row_count: Number(info.changes) } } };
+      } catch (e) {
+        return { type: 'error', error: { message: e.message } };
       }
-      return { type: 'ok', response: { type: 'execute', result } };
     });
     return { ok: true, status: 200, json: async () => ({ results }) };
   }

@@ -1,251 +1,225 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { create } = require('../cloud.js');
-const { handleSync } = require('../api/_core.js');
+const { handleSync, handleHistory } = require('../api/_core.js');
 const { createFakeTurso } = require('./fake-turso.js');
 
-const ENV = { TURSO_DATABASE_URL: 'libsql://x.turso.io', TURSO_AUTH_TOKEN: 't', SYNC_PASSWORD: 'pw' };
+const ENV = { TURSO_DATABASE_URL: 'libsql://x.turso.io', TURSO_AUTH_TOKEN: 't' };
 const mkData = (n) => ({ sellers: [], decks: [{ id: 'd1', name: 'x', items: [{ code: 'A', qty: n }], purchases: [] }], cards: {} });
 
-// เซิร์ฟเวอร์จริง (api/_core.js) ต่อกับ Turso จำลอง เครื่องหลายเครื่องใช้ร่วมกันได้
+// เซิร์ฟเวอร์จริง (api/_core.js) ต่อกับ Turso จำลอง (SQLite จริง) ใช้นาฬิกาเดียวกับทุกเครื่อง
 function makeServer() {
   const fake = createFakeTurso();
+  const clock = { t: 1_000_000 };
+  const opts = { fetchImpl: fake.fetchImpl, now: () => clock.t };
   const server = {
     fake,
+    clock,
     down: false,
     status404: false,
     beforeReply: null,
-    async fetch(_url, init) {
+    async fetch(url, init) {
       if (server.down) throw new TypeError('network down');
       if (server.status404) return { status: 404, json: async () => ({}) };
-      const out = await handleSync(
-        { method: init.method, headers: init.headers, body: init.body ? JSON.parse(init.body) : null },
-        ENV, fake.fetchImpl,
-      );
+      const u = new URL(url, 'http://x');
+      const out = u.pathname === '/api/history'
+        ? await handleHistory({ method: init.method, query: Object.fromEntries(u.searchParams) }, ENV, opts)
+        : await handleSync({ method: init.method, body: init.body ? JSON.parse(init.body) : null }, ENV, opts);
       if (server.beforeReply) server.beforeReply(init.method);
       return { status: out.status, json: async () => out.body };
     },
+    cloudData: () => JSON.parse(fake.db.all("SELECT data FROM deck_state WHERE id = 'main'")[0].data),
+    history: () => fake.db.all('SELECT reason, data FROM deck_history ORDER BY id').map((r) => ({ reason: r.reason, data: JSON.parse(r.data) })),
   };
   return server;
 }
 
-function makeDevice(server, { pristine = false, data = mkData(1), choice = null } = {}) {
-  const store = new Map();
-  const d = { data, statuses: [], timers: [], conflicts: [], choice };
+function makeDevice(server, { pristine = false, data = mkData(1), store = new Map() } = {}) {
+  const d = { data, statuses: [], notices: [], timers: [], store };
   const storage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
-  d.store = store;
   d.cloud = create({
     getData: () => d.data,
     applyData: (x) => { d.data = x; },
     isPristine: () => pristine,
     onStatus: (s, det) => d.statuses.push(det ? `${s}:${det}` : s),
-    resolveConflict: async (info) => { d.conflicts.push(info); return d.choice; },
+    onNotice: (n) => d.notices.push(n),
     fetchImpl: (u, i) => server.fetch(u, i),
     storage,
+    now: () => server.clock.t,
     setTimer: (fn) => { d.timers.push(fn); return d.timers.length; },
     clearTimer: (id) => { if (id) d.timers[id - 1] = null; },
   });
   d.last = () => d.statuses[d.statuses.length - 1];
+  d.edit = (n) => { server.clock.t += 1000; d.data = mkData(n); d.cloud.markDirty(); };
   return d;
 }
 
-const cloudData = (server) => JSON.parse(server.fake.db.row.data);
-
-test('เปิดซิงก์ตอนคลาวด์ยังว่าง → ส่งข้อมูลเครื่องนี้ขึ้นไป', async () => {
+test('เปิดครั้งแรกตอนเซิร์ฟเวอร์ยังว่าง → บันทึกข้อมูลเครื่องนี้ขึ้นไปเลย ไม่ต้องตั้งค่าอะไร', async () => {
   const server = makeServer();
   const a = makeDevice(server, { data: mkData(4) });
-  await a.cloud.enable('pw');
-  assert.equal(a.last(), 'synced');
-  assert.deepEqual(cloudData(server), mkData(4));
-  assert.equal(a.cloud.getStatus().updatedAt, server.fake.db.row.updatedAt);
+  await a.cloud.start();
+  assert.equal(a.last(), 'saved');
+  assert.deepEqual(server.cloudData(), mkData(4));
 });
 
-test('เครื่องใหม่ที่ยังว่าง → รับข้อมูลจากคลาวด์เลย ไม่ถามซ้ำ', async () => {
+test('เครื่องใหม่ที่ยังว่าง → โหลดข้อมูลจากเซิร์ฟเวอร์', async () => {
   const server = makeServer();
-  await makeDevice(server, { data: mkData(4) }).cloud.enable('pw');
+  await makeDevice(server, { data: mkData(4) }).cloud.start();
   const b = makeDevice(server, { pristine: true, data: mkData(0) });
-  await b.cloud.enable('pw');
+  await b.cloud.start();
   assert.deepEqual(b.data, mkData(4));
-  assert.equal(b.conflicts.length, 0);
-  assert.equal(b.last(), 'synced');
+  assert.deepEqual(b.notices, []);
 });
 
-test('แก้ข้อมูล → สถานะ pending แล้วส่งตอนตัวจับเวลาทำงาน', async () => {
+test('แก้ข้อมูล → pending แล้วบันทึกเมื่อครบเวลา', async () => {
   const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
-  await a.cloud.enable('pw');
-  a.data = mkData(2);
-  a.cloud.markDirty();
+  const a = makeDevice(server);
+  await a.cloud.start();
+  a.edit(2);
   assert.equal(a.last(), 'pending');
   assert.equal(a.timers.filter(Boolean).length, 1);
-  assert.deepEqual(cloudData(server), mkData(1)); // ยังไม่ส่งจนกว่าจะครบเวลา
+  assert.deepEqual(server.cloudData(), mkData(1));
   await a.cloud.sync();
-  assert.deepEqual(cloudData(server), mkData(2));
-  assert.equal(a.last(), 'synced');
-  assert.equal(a.cloud.getStatus().dirty, false);
+  assert.deepEqual(server.cloudData(), mkData(2));
+  assert.equal(a.last(), 'saved');
 });
 
-test('เครื่องอื่นแก้ไปก่อนและเครื่องนี้ไม่มีงานค้าง → รับของใหม่มา', async () => {
+test('เครื่องอื่นแก้ไปแล้ว เครื่องนี้ไม่มีงานค้าง → ดึงของใหม่มา', async () => {
   const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
+  const a = makeDevice(server);
   const b = makeDevice(server, { pristine: true, data: mkData(0) });
-  await a.cloud.enable('pw');
-  await b.cloud.enable('pw');
-  a.data = mkData(5);
-  a.cloud.markDirty();
-  await a.cloud.sync();
+  await a.cloud.start();
+  await b.cloud.start();
+  a.edit(5); await a.cloud.sync();
   await b.cloud.sync();
   assert.deepEqual(b.data, mkData(5));
 });
 
-test('แก้ชนกัน → ถามผู้ใช้ เลือกเครื่องนี้แล้วทับคลาวด์', async () => {
-  const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
-  const b = makeDevice(server, { pristine: true, data: mkData(0) });
-  await a.cloud.enable('pw');
-  await b.cloud.enable('pw');
-  a.data = mkData(2); a.cloud.markDirty(); await a.cloud.sync();
-  b.data = mkData(3); b.cloud.markDirty();
-  b.choice = 'local';
-  await b.cloud.sync();
-  assert.equal(b.conflicts.length, 1);
-  assert.deepEqual(b.conflicts[0].cloud.data, mkData(2));
-  assert.deepEqual(b.conflicts[0].local, mkData(3));
-  assert.deepEqual(cloudData(server), mkData(3));
-  assert.equal(b.last(), 'synced');
-});
-
-test('แก้ชนกัน → เลือกคลาวด์แล้วของเครื่องนี้ถูกแทนที่', async () => {
-  const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
-  const b = makeDevice(server, { pristine: true, data: mkData(0) });
-  await a.cloud.enable('pw');
-  await b.cloud.enable('pw');
-  a.data = mkData(2); a.cloud.markDirty(); await a.cloud.sync();
-  b.data = mkData(3); b.cloud.markDirty();
-  b.choice = 'cloud';
-  await b.cloud.sync();
-  assert.deepEqual(b.data, mkData(2));
-  assert.deepEqual(cloudData(server), mkData(2));
-  assert.equal(b.cloud.getStatus().dirty, false);
-});
-
-test('แก้ชนกัน → กด "ไว้ก่อน" ไม่ส่งไม่รับ และค้างสถานะ conflict', async () => {
-  const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
-  const b = makeDevice(server, { pristine: true, data: mkData(0) });
-  await a.cloud.enable('pw');
-  await b.cloud.enable('pw');
-  a.data = mkData(2); a.cloud.markDirty(); await a.cloud.sync();
-  b.data = mkData(3); b.cloud.markDirty();
-  b.choice = null;
-  await b.cloud.sync();
-  assert.equal(b.last(), 'conflict');
-  assert.deepEqual(b.data, mkData(3));
-  assert.deepEqual(cloudData(server), mkData(2));
-  assert.equal(b.cloud.getStatus().dirty, true);
-});
-
-test('เครื่องที่มีข้อมูลอยู่แล้วเปิดซิงก์ครั้งแรกตอนคลาวด์มีข้อมูล → ถาม ไม่ทับเงียบ ๆ', async () => {
-  const server = makeServer();
-  await makeDevice(server, { data: mkData(7) }).cloud.enable('pw');
-  const c = makeDevice(server, { pristine: false, data: mkData(1) });
-  c.choice = null;
-  await c.cloud.enable('pw');
-  assert.equal(c.conflicts.length, 1);
-  assert.deepEqual(cloudData(server), mkData(7));
-});
-
-test('รหัสผิด → ปิดซิงก์และล้างรหัสในเครื่อง', async () => {
+test('ชนกัน: เครื่องนี้แก้ก่อน (ตอนออฟไลน์) → ใช้ชุดล่าสุดของเครื่องอื่น ไม่ถาม ชุดของเครื่องนี้อยู่ในประวัติ', async () => {
   const server = makeServer();
   const a = makeDevice(server);
-  await a.cloud.enable('wrong');
-  assert.equal(a.last(), 'off:auth');
-  assert.equal(a.cloud.getStatus().enabled, false);
-  assert.equal(JSON.parse(a.store.get('optcg-deck-buyer.cloud')).key, '');
+  const b = makeDevice(server, { pristine: true, data: mkData(0) });
+  await a.cloud.start();
+  await b.cloud.start();
+  server.down = true;
+  b.edit(7); await b.cloud.sync();          // มือถือแก้ตอนไม่มีเน็ต
+  assert.equal(b.last(), 'offline');
+  server.down = false;
+  a.edit(8); await a.cloud.sync();          // คอมแก้ทีหลัง
+  await b.cloud.sync();                     // มือถือกลับมามีเน็ต
+  assert.deepEqual(b.data, mkData(8));
+  assert.deepEqual(b.notices, ['lost']);
+  assert.deepEqual(server.cloudData(), mkData(8));
+  assert.deepEqual(server.history().find((h) => h.reason === 'lost').data, mkData(7));
 });
 
-test('ออฟไลน์ → สถานะ offline และของที่ยังไม่ได้ส่งไม่หาย', async () => {
+test('ชนกัน: เครื่องนี้แก้ทีหลัง → ของเครื่องนี้ชนะ ชุดเดิมของเครื่องอื่นอยู่ในประวัติ แล้วเครื่องอื่นดึงไป', async () => {
   const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
-  await a.cloud.enable('pw');
-  server.down = true;
-  a.data = mkData(2);
-  a.cloud.markDirty();
+  const a = makeDevice(server);
+  const b = makeDevice(server, { pristine: true, data: mkData(0) });
+  await a.cloud.start();
+  await b.cloud.start();
+  a.edit(2); await a.cloud.sync();
+  b.edit(3);                                 // B ยังไม่เห็นของ A แต่แก้ทีหลัง
+  await b.cloud.sync();
+  assert.deepEqual(server.cloudData(), mkData(3));
+  assert.deepEqual(b.notices, []);
+  assert.deepEqual(server.history().find((h) => h.reason === 'overwritten').data, mkData(2));
   await a.cloud.sync();
+  assert.deepEqual(a.data, mkData(3));
+});
+
+test('เครื่องที่มีข้อมูลเดิม (ยังไม่เคยบันทึกขึ้นเซิร์ฟเวอร์) เจอเซิร์ฟเวอร์ที่มีข้อมูลแล้ว → ข้อมูลเดิมไม่หาย อยู่ในประวัติ', async () => {
+  const server = makeServer();
+  const a = makeDevice(server, { data: mkData(4) });
+  await a.cloud.start();
+  a.edit(5); await a.cloud.sync();
+  const old = makeDevice(server, { pristine: false, data: mkData(9) }); // ข้อมูลเก่าในเครื่อง ไม่มีเวลาแก้
+  await old.cloud.start();
+  assert.deepEqual(old.data, mkData(5));
+  assert.deepEqual(old.notices, ['lost']);
+  assert.deepEqual(server.history().find((h) => h.reason === 'lost').data, mkData(9));
+});
+
+test('ออฟไลน์ → ใช้ต่อได้ งานที่ยังไม่ส่งไม่หาย และส่งเมื่อกลับมามีเน็ต', async () => {
+  const server = makeServer();
+  const a = makeDevice(server);
+  await a.cloud.start();
+  server.down = true;
+  a.edit(2); await a.cloud.sync();
   assert.equal(a.last(), 'offline');
   assert.equal(a.cloud.getStatus().dirty, true);
   server.down = false;
   await a.cloud.sync();
-  assert.deepEqual(cloudData(server), mkData(2));
-  assert.equal(a.last(), 'synced');
+  assert.deepEqual(server.cloudData(), mkData(2));
+  assert.equal(a.last(), 'saved');
 });
 
-test('เว็บที่ไม่มี /api/sync (404) → unavailable', async () => {
+test('เปิดแบบไม่มีเซิร์ฟเวอร์ (404) → unavailable ข้อมูลยังอยู่ในเครื่อง', async () => {
   const server = makeServer();
   server.status404 = true;
-  const a = makeDevice(server);
-  await a.cloud.enable('pw');
+  const a = makeDevice(server, { data: mkData(3) });
+  await a.cloud.start();
   assert.equal(a.last(), 'unavailable');
+  assert.deepEqual(a.data, mkData(3));
+});
+
+test('กู้คืนจากประวัติ → ใช้ในเครื่องทันที บันทึกเป็นชุดล่าสุด และสำรองชุดก่อนกู้ไว้', async () => {
+  const server = makeServer();
+  const a = makeDevice(server, { data: mkData(1) });
+  await a.cloud.start();
+  a.edit(2); await a.cloud.sync();          // สำรองอัตโนมัติ mkData(1)
+  a.edit(3); await a.cloud.sync();
+  const items = await a.cloud.listHistory();
+  const target = items.find((i) => i.summary.cards === 1);
+  assert.ok(target, 'ต้องมีชุด mkData(1) ในประวัติ');
+  await a.cloud.restore(target.id);
+  assert.deepEqual(a.data, mkData(1));
+  assert.deepEqual(server.cloudData(), mkData(1));
+  assert.equal(a.last(), 'saved');
+  assert.deepEqual(server.history().find((h) => h.reason === 'before_restore').data, mkData(3));
+});
+
+test('กู้คืนตอนออฟไลน์ → แจ้ง error ข้อมูลในเครื่องไม่เปลี่ยน', async () => {
+  const server = makeServer();
+  const a = makeDevice(server, { data: mkData(1) });
+  await a.cloud.start();
+  server.down = true;
+  await assert.rejects(a.cloud.restore(1), /offline/);
+  await assert.rejects(a.cloud.listHistory(), /offline/);
+  assert.deepEqual(a.data, mkData(1));
 });
 
 test('แก้ข้อมูลระหว่างที่กำลังส่ง → ไม่ลืมของใหม่ ส่งอีกรอบ', async () => {
   const server = makeServer();
-  const a = makeDevice(server, { data: mkData(1) });
-  await a.cloud.enable('pw');
-  a.data = mkData(2);
-  a.cloud.markDirty();
+  const a = makeDevice(server);
+  await a.cloud.start();
+  a.edit(2);
   a.timers.length = 0;
-  // ระหว่างรอเซิร์ฟเวอร์ตอบคำสั่งเขียน (PUT) ผู้ใช้แก้ต่อ
   server.beforeReply = (method) => {
     if (method !== 'PUT') return;
     server.beforeReply = null;
-    a.data = mkData(3);
-    a.cloud.markDirty();
+    a.edit(3);
   };
   await a.cloud.sync();
   assert.equal(a.cloud.getStatus().dirty, true);
   assert.ok(a.timers.some(Boolean), 'ต้องตั้งเวลาส่งรอบถัดไป');
   await a.cloud.sync();
-  assert.deepEqual(cloudData(server), mkData(3));
+  assert.deepEqual(server.cloudData(), mkData(3));
   assert.equal(a.cloud.getStatus().dirty, false);
 });
 
-test('ยังไม่เปิดซิงก์ → markDirty ไม่ทำอะไร ไม่ตั้งเวลา', async () => {
+test('จำเวอร์ชันและงานค้างไว้ข้ามการเปิดแอปใหม่', async () => {
   const server = makeServer();
-  const a = makeDevice(server);
-  a.cloud.markDirty();
-  assert.equal(a.timers.length, 0);
-  assert.equal(server.fake.db.calls, 0);
-});
-
-test('ปิดซิงก์ → เลิกส่ง และข้อมูลเดิมในเครื่องกับคลาวด์ยังอยู่', async () => {
-  const server = makeServer();
-  const a = makeDevice(server, { data: mkData(4) });
-  await a.cloud.enable('pw');
-  a.cloud.disable();
-  assert.equal(a.last(), 'off');
-  assert.deepEqual(a.data, mkData(4));
-  assert.deepEqual(cloudData(server), mkData(4));
-  const calls = server.fake.db.calls;
-  a.cloud.markDirty();
-  await a.cloud.sync();
-  assert.equal(server.fake.db.calls, calls);
-});
-
-test('จำการเปิดซิงก์ไว้ข้ามการเปิดแอปใหม่ (รหัสและเวอร์ชันอยู่ใน storage)', async () => {
-  const server = makeServer();
-  const a = makeDevice(server, { data: mkData(2) });
-  await a.cloud.enable('pw');
-  // จำลองเปิดแอปใหม่ด้วย storage เดิม
-  const again = create({
-    getData: () => a.data, applyData: (x) => { a.data = x; }, onStatus: () => {},
-    fetchImpl: (u, i) => server.fetch(u, i),
-    storage: { getItem: (k) => a.store.get(k) ?? null, setItem: (k, v) => a.store.set(k, v) },
-    setTimer: () => 1, clearTimer: () => {},
-  });
-  assert.equal(again.getStatus().enabled, true);
-  assert.equal(again.getStatus().updatedAt, server.fake.db.row.updatedAt);
-  await again.start();
-  assert.equal(again.getStatus().status, 'synced');
+  const store = new Map();
+  const a = makeDevice(server, { data: mkData(2), store });
+  await a.cloud.start();
+  server.down = true;
+  a.edit(6); await a.cloud.sync();
+  server.down = false;
+  const again = makeDevice(server, { data: a.data, store }); // เปิดแอปใหม่ storage เดิม
+  assert.equal(again.cloud.getStatus().dirty, true);
+  await again.cloud.start();
+  assert.deepEqual(server.cloudData(), mkData(6));
+  assert.equal(again.last(), 'saved');
 });

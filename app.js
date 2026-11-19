@@ -682,119 +682,122 @@
     });
   }
 
-  // ---------- ซิงก์ข้ามเครื่อง ----------
+  // ---------- บันทึกขึ้นเซิร์ฟเวอร์ (Turso) + ประวัติ / กู้คืน ----------
 
-  const CLOUD_TEXT = {
-    off: 'ยังไม่ได้เปิดซิงก์',
-    idle: 'เปิดซิงก์อยู่',
-    syncing: 'กำลังซิงก์…',
-    synced: 'ซิงก์แล้ว ข้อมูลเครื่องนี้ตรงกับคลาวด์',
-    pending: 'มีการแก้ไขที่ยังไม่ได้ส่ง กำลังจะซิงก์',
-    offline: 'ออฟไลน์ จะลองใหม่เมื่อมีเน็ต (ข้อมูลในเครื่องยังอยู่)',
-    conflict: 'ข้อมูลไม่ตรงกัน ยังไม่ได้เลือกว่าจะใช้ชุดไหน',
-    unavailable: 'เวอร์ชันนี้ไม่มีระบบซิงก์ ใช้ได้เฉพาะเว็บที่ deploy บน Vercel',
+  const SAVE_TEXT = {
+    idle: ['กำลังโหลด…', 'กำลังโหลดข้อมูลจากเซิร์ฟเวอร์'],
+    saving: ['กำลังบันทึก…', 'กำลังบันทึกขึ้นเซิร์ฟเวอร์'],
+    saved: ['บันทึกแล้ว', 'บันทึกแล้ว เปิดจากเครื่องไหนก็เห็นข้อมูลชุดนี้'],
+    pending: ['กำลังบันทึก…', 'มีการแก้ไข กำลังจะบันทึก'],
+    offline: ['ออฟไลน์', 'ออฟไลน์ แก้ต่อได้ ข้อมูลเก็บไว้ในเครื่อง จะบันทึกเมื่อมีเน็ต'],
+    unavailable: ['เก็บในเครื่อง', 'เวอร์ชันนี้ไม่มีเซิร์ฟเวอร์ ข้อมูลเก็บไว้ในเครื่องนี้เท่านั้น'],
   };
 
-  function cloudText(status, detail) {
-    if (status === 'error') return detail === 'not_configured' ? 'ฝั่งเซิร์ฟเวอร์ยังตั้งค่า Turso/รหัสซิงก์ไม่ครบ' : `ผิดพลาด: ${detail}`;
-    return CLOUD_TEXT[status] || '';
+  function saveText(status, detail) {
+    if (status === 'error') {
+      return detail === 'not_configured'
+        ? ['ยังไม่ตั้งค่า', 'ฝั่งเซิร์ฟเวอร์ยังไม่ได้ตั้ง TURSO_DATABASE_URL / TURSO_AUTH_TOKEN ข้อมูลเก็บไว้ในเครื่องก่อน']
+        : ['บันทึกไม่ได้', `บันทึกไม่ได้ (${detail}) ข้อมูลยังอยู่ในเครื่อง จะลองใหม่`];
+    }
+    return SAVE_TEXT[status] || ['', ''];
   }
 
-  function summarize(data, updatedAt) {
-    const decks = data.decks || [];
-    const cards = decks.reduce((a, d) => a + d.items.reduce((b, i) => b + i.qty, 0), 0);
-    const placed = decks.reduce((a, d) => a + d.purchases.reduce((b, p) => b + p.qty, 0), 0);
-    const when = updatedAt
-      ? `อัปเดต ${new Date(updatedAt).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
-      : '';
-    return [`${decks.length} เด็ค · ${cards} ใบ`, `จัดเข้ากล่องแล้ว ${placed} ใบ · ${(data.sellers || []).length} คนขาย`, when].filter(Boolean).join('\n');
-  }
-
-  function renderCloudStatus(status, detail) {
+  function renderSaveStatus(status, detail) {
+    const [short, long] = saveText(status, detail);
     document.querySelectorAll('.cloud-dot').forEach((d) => { d.dataset.state = status; });
-    $('#menu-cloud-state').textContent = status === 'off' ? '' : `· ${cloudText(status, detail).split(' ')[0]}`;
-    $('#cloud-state').textContent = cloudText(status, detail);
-    const on = status !== 'off';
-    $('#cloud-off-box').hidden = on;
-    $('#cloud-enable').hidden = on;
-    $('#cloud-sync').hidden = !on;
-    $('#cloud-off').hidden = !on;
-    if (status === 'off' && detail === 'auth') toast('รหัสซิงก์ไม่ถูกต้อง');
+    $('#save-label').textContent = short;
+    $('#btn-save').title = `${long} · คลิกเพื่อดูประวัติ / กู้คืน`;
+    $('#menu-save-state').textContent = `· ${short}`;
+    $('#save-state').textContent = long;
   }
 
-  // เปิดหน้าต่างให้เลือกว่าจะใช้ข้อมูลชุดไหน คืน 'cloud' | 'local' | null (ปิด/ไว้ก่อน)
-  // ปุ่มตัดสินใจเรียก finishConflict ตรง ๆ ไม่รอเหตุการณ์ close (ถ้าเหตุการณ์ไม่มาถึง รอบซิงก์จะค้างตลอด)
-  let finishConflict = null;
-  function askConflict({ cloud: remote, local }) {
-    return new Promise((resolve) => {
-      const dlg = $('#conflict-dlg');
-      $('#conflict-cloud').textContent = summarize(remote.data, remote.updatedAt);
-      $('#conflict-local').textContent = summarize(local);
-      finishConflict = (choice) => {
-        finishConflict = null;
-        if (dlg.open) dlg.close();
-        resolve(choice);
-      };
-      dlg.showModal();
-    });
+  const REASON_TEXT = {
+    auto: 'สำรองอัตโนมัติ',
+    overwritten: 'ถูกทับโดยการแก้ที่ใหม่กว่า',
+    lost: 'แก้จากอีกเครื่องที่เก่ากว่า (ไม่ได้ใช้)',
+    before_restore: 'ก่อนกู้คืน',
+  };
+
+  const when = (t) => new Date(t).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  async function renderHistory() {
+    const list = $('#history-list');
+    list.innerHTML = '<p class="muted">กำลังโหลด…</p>';
+    let items;
+    try {
+      items = await cloud.listHistory();
+    } catch (e) {
+      list.innerHTML = `<p class="muted">โหลดประวัติไม่ได้ (${esc(e.message === 'offline' ? 'ออฟไลน์' : e.message)})</p>`;
+      return;
+    }
+    if (items.length === 0) {
+      list.innerHTML = '<p class="muted">ยังไม่มีประวัติ จะเริ่มสำรองเมื่อมีการแก้ไขครั้งต่อไป</p>';
+      return;
+    }
+    list.innerHTML = items.map((h) => `<div class="history-item">
+      <div>
+        <b>${esc(when(h.savedAt))}</b> <span class="muted">· ${esc(REASON_TEXT[h.reason] || h.reason)}</span>
+        <div class="muted">${h.summary.decks} เด็ค · ${h.summary.cards} ใบ · จัดแล้ว ${h.summary.placed} ใบ · ${h.summary.sellers} คนขาย
+          ${h.editedAt ? ` · แก้ล่าสุด ${esc(when(h.editedAt))}` : ''}</div>
+      </div>
+      <button type="button" class="btn" data-restore="${h.id}">กู้คืน</button>
+    </div>`).join('');
   }
 
-  function bindCloud() {
-    const dlg = $('#cloud-dlg');
-    $('#btn-cloud').addEventListener('click', () => {
+  function bindSave() {
+    const dlg = $('#history-dlg');
+    $('#btn-save').addEventListener('click', () => {
       const st = cloud.getStatus();
-      renderCloudStatus(st.status, st.detail);
-      $('#cloud-key').value = '';
+      renderSaveStatus(st.status, st.detail);
       dlg.showModal();
+      renderHistory();
     });
-    $('#cloud-close').addEventListener('click', () => dlg.close());
-    $('#cloud-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const key = $('#cloud-key').value.trim();
-      if (!key) { toast('ใส่รหัสซิงก์ก่อน'); return; }
-      await cloud.enable(key);
+    $('#history-close').addEventListener('click', () => dlg.close());
+    $('#history-list').addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-restore]');
+      if (!b) return;
+      if (!confirm('กู้คืนชุดนี้เป็นข้อมูลล่าสุด? ชุดปัจจุบันจะถูกสำรองไว้ในประวัติก่อน')) return;
+      b.disabled = true;
+      try {
+        await cloud.restore(b.dataset.restore);
+        dlg.close();
+        toast('กู้คืนแล้ว');
+      } catch (err) {
+        b.disabled = false;
+        toast(`กู้คืนไม่ได้ (${err.message === 'offline' ? 'ออฟไลน์' : err.message})`);
+      }
     });
-    $('#cloud-sync').addEventListener('click', () => cloud.sync());
-    $('#cloud-off').addEventListener('click', () => {
-      if (!confirm('ปิดซิงก์บนเครื่องนี้? ข้อมูลในเครื่องและในคลาวด์จะไม่ถูกลบ')) return;
-      cloud.disable();
-    });
-    $('#conflict-cloud-btn').addEventListener('click', () => finishConflict && finishConflict('cloud'));
-    $('#conflict-local-btn').addEventListener('click', () => finishConflict && finishConflict('local'));
-    $('#conflict-later').addEventListener('click', () => finishConflict && finishConflict(null));
-    // กด Esc ปิดหน้าต่าง = "ไว้ก่อน" (หลังเลือกปกติ finishConflict เป็น null แล้ว จึงไม่ทำซ้ำ)
-    $('#conflict-dlg').addEventListener('close', () => finishConflict && finishConflict(null));
-    $('#conflict-dlg').addEventListener('cancel', () => finishConflict && finishConflict(null));
 
-    // กลับมาที่แท็บหรือกลับมาออนไลน์ → ดึงของใหม่จากเครื่องอื่น
+    // กลับมาที่แท็บหรือกลับมาออนไลน์ → ดึงของใหม่ / ส่งของค้าง
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && cloud.getStatus().status !== 'conflict') cloud.sync();
+      if (document.visibilityState === 'visible') cloud.sync();
     });
     window.addEventListener('online', () => cloud.sync());
   }
 
-  function initCloud() {
-    // เปิดไฟล์ตรง ๆ (file://) ไม่มีเซิร์ฟเวอร์ ซ่อนปุ่มซิงก์ไปเลย
+  function initSave() {
+    // เปิดไฟล์ตรง ๆ (file://) ไม่มีเซิร์ฟเวอร์ เก็บในเครื่องอย่างเดียว ซ่อนปุ่มประวัติ
     if (location.protocol === 'file:') {
       document.querySelectorAll('[data-cloud]').forEach((el) => { el.hidden = true; });
-      cloud = { markDirty() {}, sync() {}, getStatus: () => ({ status: 'off' }) };
+      document.querySelectorAll('.cloud-dot').forEach((d) => { d.dataset.state = 'off'; });
+      cloud = { markDirty() {}, sync() {} };
       return;
     }
     cloud = window.Cloud.create({
       getData: () => { const { currentDeckId, ...rest } = state; return rest; }, // เด็คที่เปิดอยู่เป็นของแต่ละเครื่อง
       applyData: (data) => {
-        if (!isValidState(data)) { toast('ข้อมูลจากคลาวด์ผิดรูปแบบ ไม่ได้นำมาใช้'); return; }
+        if (!isValidState(data)) { toast('ข้อมูลจากเซิร์ฟเวอร์ผิดรูปแบบ ไม่ได้นำมาใช้'); return; }
         const keep = state.currentDeckId;
         state = { cards: {}, ...data, currentDeckId: data.decks.some((d) => d.id === keep) ? keep : data.decks[0].id };
         saveLocal();
         renderAll();
       },
       isPristine: () => state.sellers.length === 0 && state.decks.every((d) => d.items.length === 0 && d.purchases.length === 0),
-      onStatus: renderCloudStatus,
-      resolveConflict: askConflict,
+      onStatus: renderSaveStatus,
+      onNotice: () => toast('ใช้ข้อมูลล่าสุดจากอีกเครื่อง · ชุดของเครื่องนี้เก็บไว้ในประวัติ'),
     });
-    bindCloud();
-    renderCloudStatus(cloud.getStatus().status, '');
+    bindSave();
+    renderSaveStatus('idle', '');
     cloud.start();
   }
 
@@ -840,7 +843,7 @@
   showMobileTab('deck');
   narrow.addEventListener('change', renderAll);
   renderAll();
-  initCloud();
+  initSave();
   // ดึงชื่อ/รูปของการ์ดที่ยังไม่มีข้อมูล
   const codes = new Set(state.decks.flatMap((d) => d.items.map((i) => i.code)));
   codes.forEach((code) => fetchCardInfo(code));

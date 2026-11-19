@@ -15,7 +15,7 @@
       <button type="button" id="deck-new" class="btn desk-only" title="เด็คใหม่">+ เด็ค</button>
       <button type="button" id="deck-rename" class="btn ghost desk-only" title="เปลี่ยนชื่อเด็ค">ชื่อ</button>
       <button type="button" id="deck-delete" class="btn ghost desk-only" title="ลบเด็ค">ลบ</button>
-      <button type="button" id="btn-menu" class="btn ghost mobile-only" aria-label="เมนู">⋯<i class="cloud-dot corner" data-state="off"></i></button>
+      <button type="button" id="btn-menu" class="btn ghost mobile-only" aria-label="เมนู">⋯<i class="cloud-dot corner" data-state="idle"></i></button>
     </div>
 
     <div class="stats">
@@ -26,7 +26,7 @@
     </div>
 
     <div class="file-actions desk-only">
-      <button type="button" id="btn-cloud" class="btn ghost" data-cloud title="ซิงก์ข้ามเครื่อง"><i class="cloud-dot" data-state="off"></i>ซิงก์</button>
+      <button type="button" id="btn-save" class="btn ghost save-chip" data-cloud title="สถานะการบันทึก · ประวัติ / กู้คืน"><i class="cloud-dot" data-state="idle"></i><span id="save-label">กำลังโหลด…</span></button>
       <button type="button" id="btn-theme" class="btn ghost" title="สลับธีม" aria-label="สลับธีม">◐</button>
       <button type="button" id="btn-export" class="btn ghost">Export</button>
       <label class="btn ghost">Import<input type="file" id="file-import" accept="application/json,.json" hidden></label>
@@ -91,7 +91,7 @@
       <button type="button" class="btn" data-proxy="file-deck">นำเข้าไฟล์ .deck</button>
       <button type="button" class="btn" data-proxy="btn-paste">วางเด็ค</button>
       <button type="button" class="btn" data-proxy="btn-shot">ส่งออกรูปการ์ดที่ยังขาด</button>
-      <button type="button" class="btn" data-proxy="btn-cloud" data-cloud>☁ ซิงก์ข้ามเครื่อง <span class="muted" id="menu-cloud-state"></span></button>
+      <button type="button" class="btn" data-proxy="btn-save" data-cloud>ประวัติ / กู้คืน <span class="muted" id="menu-save-state"></span></button>
       <button type="button" class="btn" data-proxy="btn-export">Export ข้อมูล</button>
       <button type="button" class="btn" data-proxy="file-import">Import ข้อมูล</button>
       <button type="button" class="btn" data-proxy="btn-theme">สลับธีมมืด/สว่าง</button>
@@ -144,36 +144,14 @@
     </form>
   </dialog>
 
-  <dialog id="cloud-dlg" class="paste-dlg">
-    <form method="dialog" id="cloud-form">
-      <h3>ซิงก์ข้ามเครื่อง</h3>
-      <p class="cloud-state" id="cloud-state"></p>
-      <div id="cloud-off-box">
-        <p class="muted">ใส่รหัสซิงก์ที่ตั้งไว้ใน Vercel (<code>SYNC_PASSWORD</code>) ใช้รหัสเดียวกันทุกเครื่อง
-          เครื่องแรกจะส่งข้อมูลขึ้นไป เครื่องที่ยังว่างจะรับข้อมูลลงมา</p>
-        <label class="stack">รหัสซิงก์<input id="cloud-key" type="password" autocomplete="off" spellcheck="false"></label>
-      </div>
-      <div class="row end">
-        <button type="button" id="cloud-close" class="btn ghost">ปิด</button>
-        <button type="button" id="cloud-off" class="btn danger" hidden>ปิดซิงก์</button>
-        <button type="button" id="cloud-sync" class="btn" hidden>ซิงก์ตอนนี้</button>
-        <button type="submit" id="cloud-enable" class="btn primary">เปิดซิงก์</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="conflict-dlg" class="paste-dlg">
-    <h3>ข้อมูลในคลาวด์ไม่ตรงกับเครื่องนี้</h3>
-    <p class="muted">มีการแก้ไขจากเครื่องอื่น และเครื่องนี้ก็มีงานที่ยังไม่ได้ส่ง เลือกชุดที่จะใช้ อีกชุดจะถูกทับ
-      (กด Export เก็บไว้ก่อนได้ โดยกด "ไว้ก่อน")</p>
-    <div class="conflict-cols">
-      <div class="conflict-col"><b>คลาวด์</b><span id="conflict-cloud"></span></div>
-      <div class="conflict-col"><b>เครื่องนี้</b><span id="conflict-local"></span></div>
-    </div>
+  <dialog id="history-dlg" class="paste-dlg">
+    <h3>ประวัติ / กู้คืน</h3>
+    <p class="cloud-state" id="save-state"></p>
+    <p class="muted">เซิร์ฟเวอร์สำรองข้อมูลไว้ให้ทุก ๆ 10 นาที รวมถึงชุดที่ถูกทับตอนแก้จากสองเครื่อง (เก็บล่าสุด 50 ชุด)
+      กู้คืนแล้วชุดนั้นจะกลายเป็นข้อมูลล่าสุด ชุดปัจจุบันถูกสำรองไว้ก่อนเสมอ</p>
+    <div class="history-list" id="history-list"></div>
     <div class="row end">
-      <button type="button" id="conflict-later" class="btn ghost">ไว้ก่อน</button>
-      <button type="button" id="conflict-cloud-btn" class="btn">ใช้ข้อมูลคลาวด์</button>
-      <button type="button" id="conflict-local-btn" class="btn primary">ใช้ข้อมูลเครื่องนี้</button>
+      <button type="button" id="history-close" class="btn ghost">ปิด</button>
     </div>
   </dialog>
 
