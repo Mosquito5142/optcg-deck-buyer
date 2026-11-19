@@ -39,8 +39,16 @@
   let pending = null;      // { sellerId, code } ระหว่างกรอกจำนวนและราคา
   let sheetCode = null;    // การ์ดที่แตะไว้ในแผ่นเลือกคนขาย (จอแคบ)
 
-  function save() {
+  let cloud = null;        // ตัวซิงก์ข้ามเครื่อง (สร้างตอน init)
+
+  // บันทึกในเบราว์เซอร์อย่างเดียว (ใช้กับสิ่งที่ไม่ต้องซิงก์ เช่นเด็คที่เปิดอยู่ และข้อมูลที่เพิ่งรับมาจากคลาวด์)
+  function saveLocal() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) { toast('บันทึกไม่ได้ (พื้นที่เต็มหรือถูกบล็อก)'); }
+  }
+
+  function save() {
+    saveLocal();
+    if (cloud) cloud.markDirty();
   }
 
   function currentDeck() {
@@ -328,7 +336,7 @@
   function bindTopbar() {
     $('#deck-select').addEventListener('change', (e) => {
       state.currentDeckId = e.target.value;
-      save(); renderAll();
+      saveLocal(); renderAll(); // เด็คที่เปิดอยู่เป็นของแต่ละเครื่อง ไม่ซิงก์
     });
     $('#deck-new').addEventListener('click', () => {
       const d = newDeck(`เด็ค ${state.decks.length + 1}`);
@@ -674,6 +682,122 @@
     });
   }
 
+  // ---------- ซิงก์ข้ามเครื่อง ----------
+
+  const CLOUD_TEXT = {
+    off: 'ยังไม่ได้เปิดซิงก์',
+    idle: 'เปิดซิงก์อยู่',
+    syncing: 'กำลังซิงก์…',
+    synced: 'ซิงก์แล้ว ข้อมูลเครื่องนี้ตรงกับคลาวด์',
+    pending: 'มีการแก้ไขที่ยังไม่ได้ส่ง กำลังจะซิงก์',
+    offline: 'ออฟไลน์ จะลองใหม่เมื่อมีเน็ต (ข้อมูลในเครื่องยังอยู่)',
+    conflict: 'ข้อมูลไม่ตรงกัน ยังไม่ได้เลือกว่าจะใช้ชุดไหน',
+    unavailable: 'เวอร์ชันนี้ไม่มีระบบซิงก์ ใช้ได้เฉพาะเว็บที่ deploy บน Vercel',
+  };
+
+  function cloudText(status, detail) {
+    if (status === 'error') return detail === 'not_configured' ? 'ฝั่งเซิร์ฟเวอร์ยังตั้งค่า Turso/รหัสซิงก์ไม่ครบ' : `ผิดพลาด: ${detail}`;
+    return CLOUD_TEXT[status] || '';
+  }
+
+  function summarize(data, updatedAt) {
+    const decks = data.decks || [];
+    const cards = decks.reduce((a, d) => a + d.items.reduce((b, i) => b + i.qty, 0), 0);
+    const placed = decks.reduce((a, d) => a + d.purchases.reduce((b, p) => b + p.qty, 0), 0);
+    const when = updatedAt
+      ? `อัปเดต ${new Date(updatedAt).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+      : '';
+    return [`${decks.length} เด็ค · ${cards} ใบ`, `จัดเข้ากล่องแล้ว ${placed} ใบ · ${(data.sellers || []).length} คนขาย`, when].filter(Boolean).join('\n');
+  }
+
+  function renderCloudStatus(status, detail) {
+    document.querySelectorAll('.cloud-dot').forEach((d) => { d.dataset.state = status; });
+    $('#menu-cloud-state').textContent = status === 'off' ? '' : `· ${cloudText(status, detail).split(' ')[0]}`;
+    $('#cloud-state').textContent = cloudText(status, detail);
+    const on = status !== 'off';
+    $('#cloud-off-box').hidden = on;
+    $('#cloud-enable').hidden = on;
+    $('#cloud-sync').hidden = !on;
+    $('#cloud-off').hidden = !on;
+    if (status === 'off' && detail === 'auth') toast('รหัสซิงก์ไม่ถูกต้อง');
+  }
+
+  // เปิดหน้าต่างให้เลือกว่าจะใช้ข้อมูลชุดไหน คืน 'cloud' | 'local' | null (ปิด/ไว้ก่อน)
+  // ปุ่มตัดสินใจเรียก finishConflict ตรง ๆ ไม่รอเหตุการณ์ close (ถ้าเหตุการณ์ไม่มาถึง รอบซิงก์จะค้างตลอด)
+  let finishConflict = null;
+  function askConflict({ cloud: remote, local }) {
+    return new Promise((resolve) => {
+      const dlg = $('#conflict-dlg');
+      $('#conflict-cloud').textContent = summarize(remote.data, remote.updatedAt);
+      $('#conflict-local').textContent = summarize(local);
+      finishConflict = (choice) => {
+        finishConflict = null;
+        if (dlg.open) dlg.close();
+        resolve(choice);
+      };
+      dlg.showModal();
+    });
+  }
+
+  function bindCloud() {
+    const dlg = $('#cloud-dlg');
+    $('#btn-cloud').addEventListener('click', () => {
+      const st = cloud.getStatus();
+      renderCloudStatus(st.status, st.detail);
+      $('#cloud-key').value = '';
+      dlg.showModal();
+    });
+    $('#cloud-close').addEventListener('click', () => dlg.close());
+    $('#cloud-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const key = $('#cloud-key').value.trim();
+      if (!key) { toast('ใส่รหัสซิงก์ก่อน'); return; }
+      await cloud.enable(key);
+    });
+    $('#cloud-sync').addEventListener('click', () => cloud.sync());
+    $('#cloud-off').addEventListener('click', () => {
+      if (!confirm('ปิดซิงก์บนเครื่องนี้? ข้อมูลในเครื่องและในคลาวด์จะไม่ถูกลบ')) return;
+      cloud.disable();
+    });
+    $('#conflict-cloud-btn').addEventListener('click', () => finishConflict && finishConflict('cloud'));
+    $('#conflict-local-btn').addEventListener('click', () => finishConflict && finishConflict('local'));
+    $('#conflict-later').addEventListener('click', () => finishConflict && finishConflict(null));
+    // กด Esc ปิดหน้าต่าง = "ไว้ก่อน" (หลังเลือกปกติ finishConflict เป็น null แล้ว จึงไม่ทำซ้ำ)
+    $('#conflict-dlg').addEventListener('close', () => finishConflict && finishConflict(null));
+    $('#conflict-dlg').addEventListener('cancel', () => finishConflict && finishConflict(null));
+
+    // กลับมาที่แท็บหรือกลับมาออนไลน์ → ดึงของใหม่จากเครื่องอื่น
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && cloud.getStatus().status !== 'conflict') cloud.sync();
+    });
+    window.addEventListener('online', () => cloud.sync());
+  }
+
+  function initCloud() {
+    // เปิดไฟล์ตรง ๆ (file://) ไม่มีเซิร์ฟเวอร์ ซ่อนปุ่มซิงก์ไปเลย
+    if (location.protocol === 'file:') {
+      document.querySelectorAll('[data-cloud]').forEach((el) => { el.hidden = true; });
+      cloud = { markDirty() {}, sync() {}, getStatus: () => ({ status: 'off' }) };
+      return;
+    }
+    cloud = window.Cloud.create({
+      getData: () => { const { currentDeckId, ...rest } = state; return rest; }, // เด็คที่เปิดอยู่เป็นของแต่ละเครื่อง
+      applyData: (data) => {
+        if (!isValidState(data)) { toast('ข้อมูลจากคลาวด์ผิดรูปแบบ ไม่ได้นำมาใช้'); return; }
+        const keep = state.currentDeckId;
+        state = { cards: {}, ...data, currentDeckId: data.decks.some((d) => d.id === keep) ? keep : data.decks[0].id };
+        saveLocal();
+        renderAll();
+      },
+      isPristine: () => state.sellers.length === 0 && state.decks.every((d) => d.items.length === 0 && d.purchases.length === 0),
+      onStatus: renderCloudStatus,
+      resolveConflict: askConflict,
+    });
+    bindCloud();
+    renderCloudStatus(cloud.getStatus().status, '');
+    cloud.start();
+  }
+
   // ---------- export / import ----------
 
   function exportData() {
@@ -716,6 +840,7 @@
   showMobileTab('deck');
   narrow.addEventListener('change', renderAll);
   renderAll();
+  initCloud();
   // ดึงชื่อ/รูปของการ์ดที่ยังไม่มีข้อมูล
   const codes = new Set(state.decks.flatMap((d) => d.items.map((i) => i.code)));
   codes.forEach((code) => fetchCardInfo(code));
