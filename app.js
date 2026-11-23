@@ -83,12 +83,27 @@
     return typeof t === 'number' ? t : null;
   }
 
-  function summary() {
-    const sellers = state.sellers.map((s) => {
+  // กล่องที่ยังเป็น "ข้อเสนอ" (ยังไม่ได้ตกลงซื้อ) เก็บต่อเด็ค · กล่องเก่าที่ไม่มีค่านี้ถือว่าซื้อแล้ว
+  function isOffer(sellerId) {
+    return !!(currentDeck().offers || {})[sellerId];
+  }
+
+  function setOffer(sellerId, offer) {
+    const deck = currentDeck();
+    deck.offers = deck.offers || {};
+    if (offer) deck.offers[sellerId] = true;
+    else delete deck.offers[sellerId];
+  }
+
+  function sellersForDeck() {
+    return state.sellers.map((s) => {
       const total = sellerTotal(s.id);
-      return total === null ? s : { ...s, total };
+      return { ...s, ...(total === null ? {} : { total }), offer: isOffer(s.id) };
     });
-    return window.Buy.deckSummary(currentDeck(), sellers);
+  }
+
+  function summary() {
+    return window.Buy.deckSummary(currentDeck(), sellersForDeck());
   }
 
   // ---------- helpers ----------
@@ -175,6 +190,7 @@
         ${art(r.code)}
         <span class="ribbon ${r.left === 0 ? 'ok' : ''}">${r.left === 0 ? '✓ ครบ' : `เหลือ ${r.left}`}</span>
         ${r.over ? `<span class="ribbon over">เกิน ${r.over}</span>` : ''}
+        ${r.offers && r.left ? `<span class="offer-badge" title="มีข้อเสนอจาก ${r.offers} คน">ข้อเสนอ ${r.offers}</span>` : ''}
         <span class="badge-qty">×${r.need}</span>
         <button type="button" class="rm" data-action="rm-item" aria-label="ลบการ์ดออกจากเด็ค" ${hasBuys ? 'disabled' : ''}>✕</button>
         <div class="tile-cap"><span class="nm">${esc(cardName(r.code))}</span><span class="cd">${esc(r.code)}${c.rarity ? ` ${esc(c.rarity)}` : ''}</span></div>
@@ -191,10 +207,16 @@
       const seller = state.sellers.find((x) => x.id === b.id);
       const lump = sellerTotal(b.id);
       const pieces = b.lines.reduce((a, p) => a + p.qty, 0);
-      return `<div class="box" data-seller="${b.id}">
+      return `<div class="box ${b.offer ? 'offer' : ''}" data-seller="${b.id}">
         <div class="box-head">
           <input class="name" data-field="name" value="${esc(seller.name)}" aria-label="ชื่อคนขาย">
           <div class="box-total">${baht(b.total)}</div>
+          <div class="box-status">
+            <button type="button" class="status-toggle ${b.offer ? 'is-offer' : 'is-bought'}" data-action="toggle-offer"
+              title="${b.offer ? 'ยังเป็นข้อเสนอ ไม่นับในยอด · กดเมื่อตกลงซื้อแล้ว' : 'ตกลงซื้อแล้ว นับในยอด · กดเพื่อกลับเป็นข้อเสนอ'}">
+              ${b.offer ? 'ข้อเสนอ' : '✓ ซื้อแล้ว'}</button>
+            ${b.offer ? '<span class="muted">ไม่นับในยอด</span>' : ''}
+          </div>
           <div class="box-fields">
             <label>ราคารวม <input type="number" min="0" step="any" data-field="total" value="${lump ?? ''}" placeholder="ทีละใบ"></label>
             <label>ค่าส่ง <input type="number" min="0" step="any" data-field="shipping" value="${seller.shipping}"></label>
@@ -273,9 +295,13 @@
     const seller = state.sellers.find((x) => x.id === sellerId);
     const left = leftOf(code);
     const lump = sellerTotal(sellerId) !== null;
-    pending = { sellerId, code, lump };
+    const deck = currentDeck();
+    // กล่องใหม่ในเด็คนี้เริ่มเป็นข้อเสนอ (กล่องที่มีของอยู่แล้วคงสถานะเดิม)
+    const offer = deck.purchases.some((p) => p.sellerId === sellerId) ? isOffer(sellerId) : true;
+    pending = { sellerId, code, lump, offer };
     setImage($('#dlg-img'), code);
-    $('#dlg-title').textContent = `${cardName(code)} → ${seller.name}`;
+    $('#dlg-title').textContent = `${cardName(code)} → ${seller.name}${offer ? ' (ข้อเสนอ)' : ''}`;
+    $('#dlg-qty-label').textContent = offer ? 'มีให้กี่ใบ' : 'จำนวน';
     $('#dlg-sub').textContent = `${code} · ${left > 0 ? `ยังเหลือ ${left} ใบในเด็ค` : 'ครบแล้ว ยังบันทึกเพิ่มได้'}`;
     $('#dlg-qty').value = left > 0 ? left : 1;
     $('#dlg-quick').innerHTML = Array.from({ length: Math.min(Math.max(left, 4), 8) }, (_, i) =>
@@ -294,7 +320,7 @@
 
   function submitAssign(e) {
     e.preventDefault();
-    const { sellerId, code, lump } = pending;
+    const { sellerId, code, lump, offer } = pending;
     const qty = parseNum($('#dlg-qty').value);
     const price = lump ? 0 : parseNum($('#dlg-price').value);
     const pricing = lump || $('#dlg-pricing').value === 'lot' ? 'lot' : 'each';
@@ -302,6 +328,7 @@
     if (qty === null || !Number.isInteger(qty) || qty < 1) { err.textContent = 'จำนวนต้องเป็นจำนวนเต็มตั้งแต่ 1'; err.hidden = false; return; }
     if (price === null) { err.textContent = pricing === 'lot' ? 'ราคารวมต้องเป็นตัวเลขที่ไม่ติดลบ' : 'ราคาต่อใบต้องเป็นตัวเลขที่ไม่ติดลบ'; err.hidden = false; return; }
     const deck = currentDeck();
+    if (!deck.purchases.some((p) => p.sellerId === sellerId)) setOffer(sellerId, offer);
     // กล่องราคารวม: รวมกับการ์ดรหัสเดิมในกล่องเป็นรายการเดียว
     const line = lump && deck.purchases.find((p) => p.sellerId === sellerId && p.code === code);
     if (line) line.qty += qty;
@@ -492,8 +519,16 @@
         for (const d of state.decks) {
           d.purchases = d.purchases.filter((p) => p.sellerId !== id);
           if (d.sellerTotals) delete d.sellerTotals[id];
+          if (d.offers) delete d.offers[id];
         }
         save(); renderAll();
+        return;
+      }
+      const toggle = t.closest('[data-action="toggle-offer"]');
+      if (toggle) {
+        const id = box.dataset.seller;
+        setOffer(id, !isOffer(id));
+        save(); renderAll(); popBox(id);
         return;
       }
       if (t.closest('button, input, label')) return;
@@ -543,6 +578,99 @@
     $('#preview').addEventListener('click', () => $('#preview').close());
   }
 
+  // ---------- เทียบราคา: หาแผนซื้อที่ถูกที่สุดจากกล่องข้อเสนอ ----------
+
+  let currentPlan = null;
+
+  // ข้อเสนอที่ส่งให้ตัวคำนวณ: กล่องที่ยังเป็นข้อเสนอและมีของ (เซ็ต = กล่องที่ตั้งราคารวม)
+  function offerSellers() {
+    const deck = currentDeck();
+    return sellersForDeck()
+      .filter((s) => s.offer)
+      .map((s) => ({ id: s.id, shipping: s.shipping, ...(typeof s.total === 'number' ? { total: s.total } : {}), lines: deck.purchases.filter((p) => p.sellerId === s.id) }))
+      .filter((s) => s.lines.length);
+  }
+
+  function renderPlan() {
+    const body = $('#plan-body');
+    const s = summary();
+    const offers = offerSellers();
+    const needs = s.remaining.filter((r) => r.left > 0).map((r) => ({ code: r.code, left: r.left }));
+    currentPlan = null;
+    $('#plan-confirm').disabled = true;
+    if (needs.length === 0) { body.innerHTML = '<p class="empty"><b>ครบแล้ว</b>การ์ดในเด็คได้ครบจากกล่องที่ซื้อแล้ว</p>'; return; }
+    if (offers.length === 0) {
+      body.innerHTML = `<p class="empty"><b>ยังไม่มีข้อเสนอ</b>สร้างกล่องคนขาย แล้วใส่การ์ดกับราคาที่เขาเสนอ
+        (กล่องใหม่จะเป็น "ข้อเสนอ" อยู่แล้ว) ใส่การ์ดใบเดียวกันได้หลายกล่อง</p>`;
+      return;
+    }
+    const plan = window.Plan.planBuy({ needs, sellers: offers });
+    currentPlan = plan;
+    const nameOf = (id) => (state.sellers.find((x) => x.id === id) || {}).name || '?';
+    const needTotal = needs.reduce((a, n) => a + n.left, 0);
+    const missingTotal = plan.missing.reduce((a, m) => a + m.qty, 0);
+    body.innerHTML = `
+      ${plan.exact ? '' : '<p class="warn-note">ข้อเสนอเยอะมาก ใช้วิธีคำนวณแบบประมาณ แผนนี้อาจไม่ใช่ราคาต่ำสุดจริง</p>'}
+      <div class="plan-sum">
+        <div><span>ได้การ์ด</span><b>${needTotal - missingTotal}/${needTotal} ใบ</b></div>
+        <div><span>ค่าการ์ด</span><b>${baht(plan.cardCost)}</b></div>
+        <div><span>ค่าส่ง</span><b>${baht(plan.shippingCost)}</b></div>
+        <div class="grand"><span>รวมทั้งแผน</span><b>${baht(plan.total)}</b></div>
+      </div>
+      ${plan.missing.length ? `<p class="warn-note">ยังไม่มีใครเสนอ: ${plan.missing.map((m) => `${esc(cardName(m.code))} ×${m.qty}`).join(', ')}</p>` : ''}
+      ${plan.sellers.map((b) => `<div class="plan-seller">
+        <div class="order-head"><h3>${esc(nameOf(b.id))}${b.isSet ? ' <span class="muted">· เซ็ตทั้งกล่อง</span>' : ''}</h3><b>${baht(b.total)}</b></div>
+        <div class="plan-lines">
+          ${b.lines.map((l) => `<div class="plan-line" data-code="${esc(l.code)}">${art(l.code)}<div>
+            <div class="nm">${esc(cardName(l.code))}</div>
+            <div class="muted">${esc(l.code)} · ×${l.qty}${b.isSet ? '' : l.whole ? ` · เหมา ${baht(l.price)}` : ` · ${baht(l.price)}/ใบ`}</div>
+          </div></div>`).join('')}
+        </div>
+        <div class="muted">ค่าการ์ด ${baht(b.cardCost)} + ค่าส่ง ${baht(b.shipping)}</div>
+      </div>`).join('')}
+      ${plan.extra.length ? `<p class="muted">ได้เกินจากเซ็ต/เหมา (แถม): ${plan.extra.map((x) => `${esc(cardName(x.code))} ×${x.qty}`).join(', ')}</p>` : ''}
+      ${plan.sellers.length ? '' : '<p class="empty">ไม่มีข้อเสนอที่ช่วยได้</p>'}`;
+    $('#plan-confirm').disabled = plan.sellers.length === 0;
+  }
+
+  // ซื้อตามแผน: กล่องที่ถูกเลือกเป็น "ซื้อแล้ว" จำนวนตามแผน การ์ดที่แผนไม่ใช้ถูกเอาออกจากกล่องนั้น
+  function confirmPlan() {
+    if (!currentPlan) return;
+    const deck = currentDeck();
+    for (const b of currentPlan.sellers) {
+      setOffer(b.id, false);
+      if (b.isSet) continue; // เซ็ตซื้อทั้งกล่องตามเดิม
+      const taken = new Map(b.lines.map((l) => [l.lineId, l]));
+      deck.purchases = deck.purchases.flatMap((p) => {
+        if (p.sellerId !== b.id) return [p];
+        const t = taken.get(p.id);
+        if (!t) return [];
+        return [t.whole ? p : { ...p, qty: t.qty }];
+      });
+    }
+    $('#plan-dlg').close();
+    save(); renderAll();
+    toast('ยืนยันซื้อตามแผนแล้ว · กล่องที่ไม่ได้เลือกยังเป็นข้อเสนอ');
+  }
+
+  function bindPlan() {
+    $('#btn-plan').addEventListener('click', () => {
+      $('#plan-body').innerHTML = '<p class="muted">กำลังคำนวณ…</p>';
+      $('#plan-dlg').showModal();
+      // ให้หน้าต่างแสดงก่อน แล้วค่อยคำนวณ (ข้อเสนอเยอะอาจใช้เวลาเกือบวินาที)
+      setTimeout(renderPlan, 30);
+    });
+    $('#plan-close').addEventListener('click', () => $('#plan-dlg').close());
+    $('#plan-confirm').addEventListener('click', () => {
+      if (!confirm('ยืนยันซื้อตามแผนนี้? กล่องที่ถูกเลือกจะเปลี่ยนเป็น "ซื้อแล้ว" และปรับจำนวนตามแผน')) return;
+      confirmPlan();
+    });
+    $('#plan-body').addEventListener('click', (e) => {
+      const line = e.target.closest('.plan-line');
+      if (line) openPreview(line.dataset.code);
+    });
+  }
+
   // ---------- มือถือ: แผ่นเลือกคนขาย เมนู แท็บ ----------
 
   function openSheet(code) {
@@ -555,7 +683,7 @@
     $('#sheet-list').innerHTML = s.sellers.map((b) => {
       const has = b.lines.filter((p) => p.code === code).reduce((a, p) => a + p.qty, 0);
       return `<button type="button" class="seller-pick" data-seller="${b.id}">
-        <span>${esc(b.name)}<small>${has ? `มีใบนี้แล้ว ×${has} · ` : ''}${b.lines.length} รายการ</small></span>
+        <span>${esc(b.name)}<small>${b.lines.length && b.offer ? 'ข้อเสนอ · ' : ''}${has ? `มีใบนี้แล้ว ×${has} · ` : ''}${b.lines.length} รายการ</small></span>
         <b>${baht(b.total)}</b>
       </button>`;
     }).join('') + '<button type="button" class="seller-pick new" data-seller="new">+ คนขายใหม่</button>';
@@ -839,6 +967,7 @@
   bindDialogs();
   bindPaste();
   $('#btn-shot').addEventListener('click', exportShot);
+  bindPlan();
   bindMobile();
   showMobileTab('deck');
   narrow.addEventListener('change', renderAll);

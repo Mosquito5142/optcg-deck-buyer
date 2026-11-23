@@ -15,8 +15,8 @@ test('เหลือ/เกิน คำนวณจากจำนวนใน
   };
   const r = deckSummary(deck, sellers);
   assert.deepEqual(r.remaining, [
-    { code: 'X', need: 4, bought: 1, left: 3, over: 0 },
-    { code: 'Y', need: 2, bought: 3, left: 0, over: 1 },
+    { code: 'X', need: 4, bought: 1, left: 3, over: 0, offers: 0 },
+    { code: 'Y', need: 2, bought: 3, left: 0, over: 1, offers: 0 },
   ]);
   assert.equal(r.missingCount, 3);
 });
@@ -71,6 +71,27 @@ test('ราคารวมของคนขายแทนผลรวมร�
   assert.equal(r.cardCost, 500);
   assert.equal(r.total, 540);
   assert.equal(r.missingCount, 0);
+});
+
+test('กล่องที่เป็นข้อเสนอไม่นับในยอดและไม่นับเป็นการ์ดที่ได้แล้ว แต่ยังมียอดของกล่องให้ดู', () => {
+  const withOffer = [
+    { id: 's1', name: 'A', shipping: 40 },
+    { id: 's2', name: 'B', shipping: 60, offer: true },
+    { id: 's3', name: 'C', shipping: 0, offer: true },
+  ];
+  const deck = {
+    items: [{ code: 'X', qty: 4 }],
+    purchases: [
+      { id: 'p1', sellerId: 's1', code: 'X', qty: 1, price: 100 },
+      { id: 'p2', sellerId: 's2', code: 'X', qty: 4, price: 50 },
+      { id: 'p3', sellerId: 's3', code: 'X', qty: 4, price: 80 },
+    ],
+  };
+  const r = deckSummary(deck, withOffer);
+  assert.deepEqual(r.remaining, [{ code: 'X', need: 4, bought: 1, left: 3, over: 0, offers: 2 }]);
+  assert.equal(r.total, 140);
+  const b = r.sellers.find((s) => s.id === 's2');
+  assert.deepEqual({ offer: b.offer, total: b.total }, { offer: true, total: 260 });
 });
 
 test('ไม่มีการจัดซื้อได้ยอดศูนย์', () => {

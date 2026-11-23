@@ -53,7 +53,10 @@
     <aside class="pane seller-pane" id="seller-pane">
       <div class="pane-head">
         <h2>คนขาย / ร้าน</h2>
-        <button type="button" id="seller-add" class="btn primary">+ คนขาย</button>
+        <div class="row-actions">
+          <button type="button" id="btn-plan" class="btn" title="หาแผนซื้อที่ถูกที่สุดจากกล่องข้อเสนอ">เทียบราคา</button>
+          <button type="button" id="seller-add" class="btn primary">+ คนขาย</button>
+        </div>
       </div>
       <div class="boxes" id="boxes"></div>
     </aside>
@@ -90,6 +93,7 @@
       <button type="button" class="btn" data-proxy="deck-rename">เปลี่ยนชื่อเด็ค</button>
       <button type="button" class="btn" data-proxy="file-deck">นำเข้าไฟล์ .deck</button>
       <button type="button" class="btn" data-proxy="btn-paste">วางเด็ค</button>
+      <button type="button" class="btn" data-proxy="btn-plan">เทียบราคา (หาแผนซื้อที่ถูกที่สุด)</button>
       <button type="button" class="btn" data-proxy="btn-shot">ส่งออกรูปการ์ดที่ยังขาด</button>
       <button type="button" class="btn" data-proxy="btn-save" data-cloud>ประวัติ / กู้คืน <span class="muted" id="menu-save-state"></span></button>
       <button type="button" class="btn" data-proxy="btn-export">Export ข้อมูล</button>
@@ -110,7 +114,7 @@
         </div>
       </div>
       <div class="row">
-        <label>จำนวน<input id="dlg-qty" type="number" min="1" required></label>
+        <label><span id="dlg-qty-label">จำนวน</span><input id="dlg-qty" type="number" min="1" required></label>
         <div class="quick" id="dlg-quick" aria-label="เลือกจำนวนเร็ว"></div>
       </div>
       <div class="row" id="dlg-price-row">
@@ -144,6 +148,17 @@
     </form>
   </dialog>
 
+  <dialog id="plan-dlg" class="paste-dlg plan-dlg">
+    <h3>เทียบราคา: แผนซื้อที่ถูกที่สุด</h3>
+    <p class="muted">คิดจากการ์ดที่ยังขาด กับกล่องที่เป็น "ข้อเสนอ" รวมค่าส่งแล้ว
+      เซ็ต (กล่องราคารวม) และรายการเหมาต้องซื้อทั้งชุด ส่วนราคาต่อใบเลือกซื้อแค่บางใบได้</p>
+    <div id="plan-body"></div>
+    <div class="row end">
+      <button type="button" id="plan-close" class="btn ghost">ปิด</button>
+      <button type="button" id="plan-confirm" class="btn primary" disabled>ซื้อตามแผนนี้</button>
+    </div>
+  </dialog>
+
   <dialog id="history-dlg" class="paste-dlg">
     <h3>ประวัติ / กู้คืน</h3>
     <p class="cloud-state" id="save-state"></p>
@@ -163,6 +178,7 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="buy.js"></script>
+  <script src="plan.js"></script>
   <script src="cards.js"></script>
   <script src="shot.js"></script>
   <script src="cloud.js"></script>
