@@ -729,11 +729,18 @@
 
   // ---------- ส่งออกรูปการ์ดที่ยังขาด ----------
 
+  // รูปสำหรับวาดลงภาพส่งออก ต้องมาจากโดเมนเดียวกัน (รูปจาก optcgapi ตรง ๆ วาดไม่ได้เพราะไม่มี CORS):
+  // รูปจากเกมในเครื่อง (start.bat) → /api/img บนเว็บ (ดึงจาก optcgapi ฝั่งเซิร์ฟเวอร์) → ลองตรง ๆ เผื่อได้
+  function shotSources(code) {
+    const proxy = location.protocol === 'file:' ? null : `/api/img?code=${encodeURIComponent(code)}`;
+    return [hasGameFolder && window.Cards.gameImage(code), proxy, state.cards[code] && state.cards[code].image].filter(Boolean);
+  }
+
   async function exportShot() {
     const deck = currentDeck();
     const s = summary();
     const cards = s.remaining.filter((r) => r.left > 0)
-      .map((r) => ({ code: r.code, name: cardName(r.code), left: r.left, sources: imageSources(r.code) }));
+      .map((r) => ({ code: r.code, name: cardName(r.code), left: r.left, sources: shotSources(r.code) }));
     if (cards.length === 0) { toast(s.remaining.length ? 'ครบทุกใบแล้ว ไม่มีการ์ดที่ขาด' : 'ยังไม่มีการ์ดในเด็ค'); return; }
     toast('กำลังสร้างรูป…');
     const date = new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
