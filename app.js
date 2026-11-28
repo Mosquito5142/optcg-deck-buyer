@@ -14,28 +14,33 @@
   }
 
   function newDeck(name) {
-    return { id: uid(), name, items: [], purchases: [] };
+    return { id: uid(), name, items: [], purchases: [], sellers: [] };
   }
 
   function defaultState() {
     const deck = newDeck('เด็คใหม่');
-    return { sellers: [], decks: [deck], currentDeckId: deck.id, cards: {} };
+    return { decks: [deck], currentDeckId: deck.id, cards: {} };
   }
 
   function isValidState(s) {
-    return s && Array.isArray(s.sellers) && Array.isArray(s.decks) && s.decks.length > 0
-      && s.decks.every((d) => Array.isArray(d.items) && Array.isArray(d.purchases));
+    return window.Sellers.isValid(s);
   }
 
+  // ข้อมูลเก่าที่คนขายอยู่ลิสต์กลางจะถูกย้ายให้แต่ละเด็คมีของตัวเองตอนโหลด
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (isValidState(s)) return { cards: {}, ...s };
+      if (isValidState(s)) {
+        const { state: next, changed } = window.Sellers.migrate({ cards: {}, ...s });
+        if (!next.decks.some((d) => d.id === next.currentDeckId)) next.currentDeckId = next.decks[0].id;
+        return { state: next, changed };
+      }
     } catch (_) { /* ข้อมูลเสียหรือเปิดแบบ private: เริ่มใหม่ */ }
-    return defaultState();
+    return { state: defaultState(), changed: false };
   }
 
-  let state = load();
+  const loaded = load();
+  let state = loaded.state;
   let pending = null;      // { sellerId, code } ระหว่างกรอกจำนวนและราคา
   let sheetCode = null;    // การ์ดที่แตะไว้ในแผ่นเลือกคนขาย (จอแคบ)
 
@@ -53,6 +58,12 @@
 
   function currentDeck() {
     return state.decks.find((d) => d.id === state.currentDeckId) || state.decks[0];
+  }
+
+  // คนขายของเด็คที่เปิดอยู่เท่านั้น เด็คอื่นมีลิสต์คนละชุด
+  function deckSellers(deck = currentDeck()) {
+    if (!Array.isArray(deck.sellers)) deck.sellers = [];
+    return deck.sellers;
   }
 
   function cardName(code) {
@@ -77,7 +88,7 @@
     img.src = rest[0];
   };
 
-  // ราคารวมที่ตกลงกับคนขายเก็บแยกต่อเด็ค เพราะคนขายคนเดียวกันใช้ได้หลายเด็ค
+  // ราคารวมของกล่องอยู่ที่เด็ค (sellerTotals) คนขายคนละเด็คเป็นคนละรายการ ไม่ใช้ชื่อ/ค่าส่งร่วมกัน
   function sellerTotal(sellerId) {
     const t = (currentDeck().sellerTotals || {})[sellerId];
     return typeof t === 'number' ? t : null;
@@ -96,7 +107,7 @@
   }
 
   function sellersForDeck() {
-    return state.sellers.map((s) => {
+    return deckSellers().map((s) => {
       const total = sellerTotal(s.id);
       return { ...s, ...(total === null ? {} : { total }), offer: isOffer(s.id) };
     });
@@ -199,12 +210,12 @@
   }
 
   function renderBoxes(s) {
-    if (state.sellers.length === 0) {
+    if (deckSellers().length === 0) {
       $('#boxes').innerHTML = `<div class="empty"><b>ยังไม่มีคนขาย</b>กด "+ คนขาย" เพื่อสร้างกล่องแรก</div>`;
       return;
     }
     $('#boxes').innerHTML = s.sellers.map((b) => {
-      const seller = state.sellers.find((x) => x.id === b.id);
+      const seller = deckSellers().find((x) => x.id === b.id);
       const lump = sellerTotal(b.id);
       const pieces = b.lines.reduce((a, p) => a + p.qty, 0);
       return `<div class="box ${b.offer ? 'offer' : ''}" data-seller="${b.id}">
@@ -286,13 +297,13 @@
   }
 
   function assign(sellerId, code) {
-    if (!state.sellers.some((x) => x.id === sellerId)) return;
+    if (!deckSellers().some((x) => x.id === sellerId)) return;
     openAssign(sellerId, code);
   }
 
   // กล่องที่ตั้งราคารวมแล้ว: ถามแค่จำนวน (คนขายอาจมีให้ไม่ครบ) มีปุ่มเลือกเร็ว
   function openAssign(sellerId, code) {
-    const seller = state.sellers.find((x) => x.id === sellerId);
+    const seller = deckSellers().find((x) => x.id === sellerId);
     const left = leftOf(code);
     const lump = sellerTotal(sellerId) !== null;
     const deck = currentDeck();
@@ -513,14 +524,14 @@
       }
       if (t.dataset.action === 'rm-seller') {
         const id = box.dataset.seller;
-        const seller = state.sellers.find((x) => x.id === id);
-        if (!confirm(`ลบคนขาย "${seller.name}" และการจัดซื้อจากคนนี้ทุกเด็ค?`)) return;
-        state.sellers = state.sellers.filter((x) => x.id !== id);
-        for (const d of state.decks) {
-          d.purchases = d.purchases.filter((p) => p.sellerId !== id);
-          if (d.sellerTotals) delete d.sellerTotals[id];
-          if (d.offers) delete d.offers[id];
-        }
+        const deck = currentDeck();
+        const seller = deckSellers(deck).find((x) => x.id === id);
+        if (!seller) return;
+        if (!confirm(`ลบคนขาย "${seller.name}" และการจัดซื้อจากคนนี้ในเด็คนี้?`)) return;
+        deck.sellers = deck.sellers.filter((x) => x.id !== id);
+        deck.purchases = deck.purchases.filter((p) => p.sellerId !== id);
+        if (deck.sellerTotals) delete deck.sellerTotals[id];
+        if (deck.offers) delete deck.offers[id];
         save(); renderAll();
         return;
       }
@@ -539,7 +550,7 @@
     root.addEventListener('change', (e) => {
       const box = e.target.closest('.box');
       if (!box) return;
-      const seller = state.sellers.find((x) => x.id === box.dataset.seller);
+      const seller = deckSellers().find((x) => x.id === box.dataset.seller);
       if (e.target.dataset.field === 'name') seller.name = e.target.value.trim() || 'คนขายไม่มีชื่อ';
       if (e.target.dataset.field === 'shipping') seller.shipping = parseNum(e.target.value) ?? 0;
       if (e.target.dataset.field === 'total') {
@@ -553,7 +564,8 @@
     });
 
     $('#seller-add').addEventListener('click', () => {
-      state.sellers.push({ id: uid(), name: `คนขาย ${state.sellers.length + 1}`, shipping: 0 });
+      const sellers = deckSellers();
+      sellers.push({ id: uid(), name: `คนขาย ${sellers.length + 1}`, shipping: 0 });
       save(); renderAll();
       const names = root.querySelectorAll('input[data-field="name"]');
       const last = names[names.length - 1];
@@ -606,7 +618,7 @@
     }
     const plan = window.Plan.planBuy({ needs, sellers: offers });
     currentPlan = plan;
-    const nameOf = (id) => (state.sellers.find((x) => x.id === id) || {}).name || '?';
+    const nameOf = (id) => (deckSellers().find((x) => x.id === id) || {}).name || '?';
     const needTotal = needs.reduce((a, n) => a + n.left, 0);
     const missingTotal = plan.missing.reduce((a, m) => a + m.qty, 0);
     body.innerHTML = `
@@ -698,10 +710,11 @@
       if (!b || !sheetCode) return;
       let sellerId = b.dataset.seller;
       if (sellerId === 'new') {
-        const name = prompt('ชื่อคนขาย', `คนขาย ${state.sellers.length + 1}`);
+        const sellers = deckSellers();
+        const name = prompt('ชื่อคนขาย', `คนขาย ${sellers.length + 1}`);
         if (name === null) return;
         sellerId = uid();
-        state.sellers.push({ id: sellerId, name: name.trim() || 'คนขายไม่มีชื่อ', shipping: 0 });
+        sellers.push({ id: sellerId, name: name.trim() || 'คนขายไม่มีชื่อ', shipping: 0 });
         save(); renderAll();
       }
       const code = sheetCode;
@@ -919,15 +932,30 @@
       return;
     }
     cloud = window.Cloud.create({
-      getData: () => { const { currentDeckId, ...rest } = state; return rest; }, // เด็คที่เปิดอยู่เป็นของแต่ละเครื่อง
-      applyData: (data) => {
-        if (!isValidState(data)) { toast('ข้อมูลจากเซิร์ฟเวอร์ผิดรูปแบบ ไม่ได้นำมาใช้'); return; }
+      // เด็คที่เปิดอยู่เป็นของแต่ละเครื่อง — ส่งขึ้นเซิร์ฟเวอร์เฉพาะข้อมูลที่ย้ายเป็นคนขายต่อเด็คแล้ว
+      getData: () => {
         const keep = state.currentDeckId;
-        state = { cards: {}, ...data, currentDeckId: data.decks.some((d) => d.id === keep) ? keep : data.decks[0].id };
+        const { currentDeckId, ...rest } = state;
+        const { state: next, changed } = window.Sellers.migrate(rest);
+        if (changed) {
+          state = { ...next, currentDeckId: keep };
+          saveLocal();
+        }
+        return next;
+      },
+      applyData: (data) => {
+        if (!isValidState(data)) { toast('ข้อมูลจากเซิร์ฟเวอร์ผิดรูปแบบ ไม่ได้นำมาใช้'); return false; }
+        const keep = state.currentDeckId;
+        const { state: next, changed } = window.Sellers.migrate({ cards: {}, ...data });
+        next.currentDeckId = next.decks.some((d) => d.id === keep) ? keep : next.decks[0].id;
+        state = next;
         saveLocal();
         renderAll();
+        return changed;
       },
-      isPristine: () => state.sellers.length === 0 && state.decks.every((d) => d.items.length === 0 && d.purchases.length === 0),
+      // เซิร์ฟเวอร์ยังเป็นลิสต์คนขายกลาง และเวอร์ชันตรงกับเครื่องนี้ → บันทึกชุดที่ย้ายแล้วทับได้
+      shouldResave: (data) => window.Sellers.migrate(data).changed,
+      isPristine: () => state.decks.every((d) => (d.sellers || []).length === 0 && d.items.length === 0 && d.purchases.length === 0),
       onStatus: renderSaveStatus,
       onNotice: () => toast('ใช้ข้อมูลล่าสุดจากอีกเครื่อง · ชุดของเครื่องนี้เก็บไว้ในประวัติ'),
     });
@@ -939,6 +967,8 @@
   // ---------- export / import ----------
 
   function exportData() {
+    const { state: next, changed } = window.Sellers.migrate(state);
+    if (changed) { state = next; save(); }
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -954,7 +984,9 @@
       try { data = JSON.parse(reader.result); } catch (_) { data = null; }
       if (!isValidState(data)) { toast('ไฟล์ไม่ถูกต้อง ข้อมูลเดิมยังอยู่'); return; }
       if (!confirm('นำเข้าข้อมูลนี้แทนข้อมูลปัจจุบันทั้งหมด?')) return;
-      state = { cards: {}, ...data };
+      // ไฟล์เก่าที่คนขายอยู่ลิสต์กลาง จะถูกย้ายให้แยกต่อเด็คก่อนบันทึก
+      const { state: next } = window.Sellers.migrate({ cards: {}, ...data });
+      state = next;
       if (!state.decks.some((d) => d.id === state.currentDeckId)) state.currentDeckId = state.decks[0].id;
       save(); renderAll();
       toast('นำเข้าแล้ว');
@@ -979,6 +1011,8 @@
   showMobileTab('deck');
   narrow.addEventListener('change', renderAll);
   renderAll();
+  // เก็บรูปแบบคนขายต่อเด็คไว้ในเครื่องก่อนซิงก์ ยังไม่ markDirty ที่นี่ กันทับข้อมูลที่ใหม่กว่าบนเซิร์ฟเวอร์
+  if (loaded.changed) saveLocal();
   initSave();
   // ดึงชื่อ/รูปของการ์ดที่ยังไม่มีข้อมูล
   const codes = new Set(state.decks.flatMap((d) => d.items.map((i) => i.code)));

@@ -150,6 +150,24 @@ test('ข้อมูลผิดรูปแบบ → 400, ใหญ่เก�
   assert.equal((await s.get()).body.data, null);
 });
 
+test('คนขายต่อเด็คบันทึกได้ สรุปประวัตินับคนขายในเด็ค และเด็คที่ไม่มี sellers โดยไม่มีลิสต์กลาง → 400', async () => {
+  const s = setup();
+  const data = {
+    decks: [
+      { id: 'd1', name: 'enal', items: [{ code: 'A', qty: 2 }], purchases: [{ id: 'p', sellerId: 's1', code: 'A', qty: 1, price: 10 }], sellers: [{ id: 's1', name: 'Pob', shipping: 30 }] },
+      { id: 'd2', name: 'imu', items: [], purchases: [], sellers: [] },
+    ],
+    cards: {},
+  };
+  assert.equal((await s.put({ data, editedAt: 1, baseUpdatedAt: 0 })).status, 200);
+  assert.deepEqual((await s.get()).body.data, data);
+  s.clock.t += 10 * 60 * 1000 + 1;
+  await s.put({ data: { ...data, decks: data.decks.map((d) => ({ ...d })) }, editedAt: 2, baseUpdatedAt: (await s.get()).body.updatedAt });
+  const list = await s.history();
+  assert.equal(list.body.items[0].summary.sellers, 1);
+  assert.equal((await s.put({ data: { decks: [{ id: 'd', name: 'x', items: [], purchases: [] }] } })).status, 400);
+});
+
 test('Turso ล่ม → 502 โดยไม่ส่งรายละเอียดภายในกลับไป', async () => {
   const s = setup();
   s.fake.db.failNext = true;

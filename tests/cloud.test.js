@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { create } = require('../cloud.js');
 const { handleSync, handleHistory } = require('../api/_core.js');
 const { createFakeTurso } = require('./fake-turso.js');
+const { migrate } = require('../sellers.js');
 
 const ENV = { TURSO_DATABASE_URL: 'libsql://x.turso.io', TURSO_AUTH_TOKEN: 't' };
 const mkData = (n) => ({ sellers: [], decks: [{ id: 'd1', name: 'x', items: [{ code: 'A', qty: n }], purchases: [] }], cards: {} });
@@ -34,12 +35,13 @@ function makeServer() {
   return server;
 }
 
-function makeDevice(server, { pristine = false, data = mkData(1), store = new Map() } = {}) {
+function makeDevice(server, { pristine = false, data = mkData(1), store = new Map(), shouldResave, applyData } = {}) {
   const d = { data, statuses: [], notices: [], timers: [], store };
   const storage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
   d.cloud = create({
     getData: () => d.data,
-    applyData: (x) => { d.data = x; },
+    applyData: (x) => (applyData ? applyData(d, x) : (d.data = x)),
+    ...(shouldResave ? { shouldResave } : {}),
     isPristine: () => pristine,
     onStatus: (s, det) => d.statuses.push(det ? `${s}:${det}` : s),
     onNotice: (n) => d.notices.push(n),
@@ -207,6 +209,63 @@ test('แก้ข้อมูลระหว่างที่กำลัง�
   await a.cloud.sync();
   assert.deepEqual(server.cloudData(), mkData(3));
   assert.equal(a.cloud.getStatus().dirty, false);
+});
+
+test('เวอร์ชันบนเซิร์ฟเวอร์ตรงกัน แต่คนขายยังเป็นลิสต์กลาง → บันทึกชุดที่แยกต่อเด็คทับ', async () => {
+  const server = makeServer();
+  const old = {
+    sellers: [
+      { id: 'p', name: 'Pob Chaikuea', shipping: 30 },
+      { id: 'm', name: 'Mee Man U', shipping: 50 },
+    ],
+    decks: [
+      { id: 'enal', name: 'enal', items: [{ code: 'A', qty: 1 }], purchases: [{ id: '1', sellerId: 'p', code: 'A', qty: 1, price: 10 }, { id: '2', sellerId: 'm', code: 'A', qty: 1, price: 8 }] },
+      { id: 'imu', name: 'imu', items: [{ code: 'B', qty: 1 }], purchases: [] },
+    ],
+    cards: {},
+  };
+  const seeded = makeDevice(server, { data: old });
+  await seeded.cloud.start();
+  const device = makeDevice(server, {
+    data: migrate(old).state,
+    store: new Map(seeded.store),
+    shouldResave: (data) => migrate(data).changed,
+  });
+  await device.cloud.start();
+  const saved = server.cloudData();
+  assert.equal(saved.sellers, undefined);
+  assert.deepEqual(saved.decks.map((d) => d.sellers.map((s) => s.name)), [['Pob Chaikuea', 'Mee Man U'], []]);
+  assert.equal(device.cloud.getStatus().dirty, false);
+});
+
+test('เครื่องว่างรับชุดคนขายลิสต์กลาง → แยกต่อเด็คแล้วบันทึกกลับ', async () => {
+  const server = makeServer();
+  const old = {
+    sellers: [{ id: 'p', name: 'Pob Chaikuea', shipping: 30 }],
+    decks: [
+      { id: 'enal', name: 'enal', items: [{ code: 'A', qty: 1 }], purchases: [{ id: '1', sellerId: 'p', code: 'A', qty: 1, price: 10 }] },
+      { id: 'imu', name: 'imu', items: [], purchases: [] },
+    ],
+    cards: {},
+  };
+  await makeDevice(server, { data: old }).cloud.start();
+  const fresh = makeDevice(server, {
+    pristine: true,
+    data: { decks: [{ id: 'new', name: 'เด็คใหม่', items: [], purchases: [], sellers: [] }], cards: {} },
+    shouldResave: (data) => migrate(data).changed,
+    applyData: (d, x) => {
+      const moved = migrate({ cards: {}, ...x });
+      d.data = moved.state;
+      return moved.changed;
+    },
+  });
+  await fresh.cloud.start();
+  assert.equal(fresh.cloud.getStatus().dirty, true);
+  await fresh.cloud.sync();
+  const saved = server.cloudData();
+  assert.equal(saved.sellers, undefined);
+  assert.deepEqual(saved.decks.map((d) => d.sellers.map((s) => s.name)), [['Pob Chaikuea'], []]);
+  assert.equal(fresh.last(), 'saved');
 });
 
 test('จำเวอร์ชันและงานค้างไว้ข้ามการเปิดแอปใหม่', async () => {

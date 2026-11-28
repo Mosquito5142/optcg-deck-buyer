@@ -2,6 +2,6 @@
   "name": "optcg-deck-buyer",
   "private": true,
   "scripts": {
-    "test": "node --test tests/buy.test.js tests/cards.test.js tests/sync.test.js tests/cloud.test.js tests/plan.test.js tests/image.test.js"
+    "test": "node --test tests/buy.test.js tests/cards.test.js tests/sync.test.js tests/cloud.test.js tests/plan.test.js tests/image.test.js tests/sellers.test.js"
   }
 }

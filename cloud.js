@@ -21,6 +21,7 @@
       now = () => Date.now(),
       endpoint = '/api/sync',
       historyEndpoint = '/api/history',
+      shouldResave = () => false,             // (data) => true เมื่อของบนเซิร์ฟเวอร์ยังเป็นรูปแบบเก่า และเวอร์ชันตรงกัน บันทึกทับได้
     } = opts;
 
     let meta = loadMeta();
@@ -73,10 +74,13 @@
     }
 
     function take(cloud) {
-      applyData(cloud.data);
+      // applyData คืน true เมื่อย้ายรูปแบบแล้ว (เช่นคนขายต่อเด็ค) ให้บันทึกชุดนั้นกลับขึ้นไป
+      const changed = applyData(cloud.data) === true;
       meta = { updatedAt: cloud.updatedAt, editedAt: cloud.editedAt, dirty: false };
       saveMeta();
-      set('saved');
+      if (!changed) { set('saved'); return; }
+      markDirty();
+      set('pending');
     }
 
     async function push() {
@@ -103,6 +107,8 @@
       const cloud = got.json;
       if (cloud.data === null || cloud.data === undefined) { await push(); return; }
       if (cloud.updatedAt === meta.updatedAt) {
+        // เวอร์ชันเดียวกัน แต่โครงสร้างเก่ายังค้างบนเซิร์ฟเวอร์ → บันทึกชุดที่ย้ายแล้ว ไม่ทับของที่ใหม่กว่า
+        if (!meta.dirty && shouldResave(cloud.data)) markDirty();
         if (meta.dirty) await push(); else set('saved');
         return;
       }

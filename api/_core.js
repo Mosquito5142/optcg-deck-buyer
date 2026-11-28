@@ -3,6 +3,8 @@
 // ชื่อไฟล์ขึ้นต้นด้วย _ เพื่อไม่ให้ Vercel เปิดเป็น endpoint
 'use strict';
 
+const { isValid: isValidData } = require('../sellers.js');
+
 const MAX_BYTES = 1000000;
 const HISTORY_KEEP = 50;
 const SNAPSHOT_EVERY = 10 * 60 * 1000; // สำรองอัตโนมัติไม่ถี่กว่าทุก 10 นาที
@@ -62,9 +64,13 @@ function readState(result) {
   return { data: row[0].value, editedAt: cell(row[1]), updatedAt: cell(row[2]) };
 }
 
-function isValidData(s) {
-  return !!s && Array.isArray(s.sellers) && Array.isArray(s.decks) && s.decks.length > 0
-    && s.decks.every((d) => d && Array.isArray(d.items) && Array.isArray(d.purchases));
+// คนขายแบบเก่าอยู่ที่ราก คนขายแบบใหม่แยกในแต่ละเด็ค นับตามแบบที่ไฟล์นั้นใช้
+function countSellers(data) {
+  const decks = data.decks || [];
+  if (decks.some((d) => d && Array.isArray(d.sellers))) {
+    return decks.reduce((a, d) => a + (d && Array.isArray(d.sellers) ? d.sellers.length : 0), 0);
+  }
+  return (data.sellers || []).length;
 }
 
 function summarize(data) {
@@ -73,7 +79,7 @@ function summarize(data) {
     decks: decks.length,
     cards: decks.reduce((a, d) => a + d.items.reduce((b, i) => b + (Number(i.qty) || 0), 0), 0),
     placed: decks.reduce((a, d) => a + d.purchases.reduce((b, p) => b + (Number(p.qty) || 0), 0), 0),
-    sellers: (data.sellers || []).length,
+    sellers: countSellers(data),
   };
 }
 
